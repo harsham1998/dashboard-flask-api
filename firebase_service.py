@@ -10,7 +10,7 @@ class FirebaseService:
     def get_data(self) -> Dict:
         """Get all data from Firebase"""
         try:
-            response = requests.get(f"{self.base_url}/.json")
+            response = requests.get(f"{self.base_url}/tasks.json")
             if response.status_code == 200:
                 data = response.json()
                 if data is None:
@@ -26,7 +26,7 @@ class FirebaseService:
     def save_data(self, data: Dict) -> bool:
         """Save data to Firebase"""
         try:
-            response = requests.put(f"{self.base_url}/.json", json=data)
+            response = requests.put(f"{self.base_url}/tasks.json", json=data)
             return response.status_code == 200
         except Exception as e:
             print(f"Firebase save_data error: {e}")

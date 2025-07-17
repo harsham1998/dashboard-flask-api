@@ -10,23 +10,23 @@ class FirebaseService:
     def get_data(self) -> Dict:
         """Get all data from Firebase"""
         try:
-            response = requests.get(f"{self.base_url}/tasks.json")
+            response = requests.get(f"{self.base_url}/data.json")
             if response.status_code == 200:
                 data = response.json()
                 if data is None:
-                    return {}
+                    return self._get_default_data()
                 return data
             else:
                 print(f"Error fetching data: {response.status_code}")
-                return {}
+                return self._get_default_data()
         except Exception as e:
             print(f"Firebase get_data error: {e}")
-            return {}
+            return self._get_default_data()
     
     def save_data(self, data: Dict) -> bool:
         """Save data to Firebase"""
         try:
-            response = requests.put(f"{self.base_url}/tasks.json", json=data)
+            response = requests.put(f"{self.base_url}/data.json", json=data)
             return response.status_code == 200
         except Exception as e:
             print(f"Firebase save_data error: {e}")
@@ -39,14 +39,14 @@ class FirebaseService:
             date = task_data.get('date', datetime.now().strftime('%Y-%m-%d'))
             
             # Initialize structure if needed
-            if not isinstance(data, dict):
-                data = {}
-            if date not in data:
-                data[date] = []
+            if 'tasks' not in data:
+                data['tasks'] = {}
+            if date not in data['tasks']:
+                data['tasks'][date] = []
             
             # Remove date from task_data before adding
             task_copy = {k: v for k, v in task_data.items() if k != 'date'}
-            data[date].append(task_copy)
+            data['tasks'][date].append(task_copy)
             
             return self.save_data(data)
         except Exception as e:

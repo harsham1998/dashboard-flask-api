@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Tester - Dashboard Flask API</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .test-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .test-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .test-card h2 {
+            color: #ffd700;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        
+        .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 14px;
+        }
+        
+        .form-group input::placeholder, .form-group textarea::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .btn {
+            background: linear-gradient(45deg, #4ade80, #22c55e);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            width: 100%;
+            margin-top: 10px;
+            transition: transform 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(45deg, #f87171, #ef4444);
+        }
+        
+        .response-section {
+            grid-column: 1 / -1;
+        }
+        
+        .response-area {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+        
+        .status-success {
+            color: #4ade80;
+        }
+        
+        .status-error {
+            color: #f87171;
+        }
+        
+        .url-display {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 8px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧪 API Tester</h1>
+            <p>Test Dashboard Flask API Endpoints</p>
+        </div>
+        
+        <div class="test-grid">
+            <!-- Task Testing -->
+            <div class="test-card">
+                <h2>📋 Task Testing</h2>
+                
+                <div class="form-group">
+                    <label>Task Text:</label>
+                    <input type="text" id="task-text" placeholder="Buy groceries" value="Test task from API tester">
+                </div>
+                
+                <div class="form-group">
+                    <label>Date (optional):</label>
+                    <input type="date" id="task-date">
+                </div>
+                
+                <button class="btn" onclick="testAddTask()">Add Task (Siri)</button>
+                <button class="btn" onclick="testGetTasks()">Get All Tasks</button>
+                <button class="btn" onclick="testGetTasksByDate()">Get Tasks by Date</button>
+            </div>
+            
+            <!-- Transaction Testing -->
+            <div class="test-card">
+                <h2>💳 Transaction Testing</h2>
+                
+                <div class="form-group">
+                    <label>SMS Message:</label>
+                    <textarea id="sms-message" rows="4" placeholder="Your UPI payment to Amazon Pay of Rs.500 is successful. Available balance: Rs.15000">Your UPI payment to Amazon Pay of Rs.500 is successful. Available balance: Rs.15000</textarea>
+                </div>
+                
+                <button class="btn" onclick="testAddTransaction()">Process Transaction (Siri)</button>
+                <button class="btn" onclick="testGetTransactions()">Get Transactions</button>
+                
+                <div class="form-group" style="margin-top: 15px;">
+                    <label>Sample Messages:</label>
+                    <button class="btn btn-danger" onclick="loadSampleCredit()">Load Credit Sample</button>
+                    <button class="btn btn-danger" onclick="loadSampleDebit()">Load Debit Sample</button>
+                </div>
+            </div>
+            
+            <!-- System Testing -->
+            <div class="test-card">
+                <h2>🛠️ System Testing</h2>
+                
+                <button class="btn" onclick="testHealth()">Health Check</button>
+                <button class="btn" onclick="testApiInfo()">API Info</button>
+                <button class="btn" onclick="clearResponse()">Clear Response</button>
+                
+                <div class="form-group" style="margin-top: 15px;">
+                    <label>Server URL:</label>
+                    <input type="text" id="server-url" value="http://localhost:5000" placeholder="http://localhost:5000">
+                </div>
+            </div>
+            
+            <!-- Firebase Testing -->
+            <div class="test-card">
+                <h2>🔥 Firebase Testing</h2>
+                
+                <button class="btn" onclick="testFirebaseRead()">Read Firebase Data</button>
+                <button class="btn" onclick="testFirebaseTasks()">Read Tasks Only</button>
+                <button class="btn" onclick="testFirebaseTransactions()">Read Transactions Only</button>
+                
+                <div class="url-display">
+                    Firebase URL: https://dashboard-app-fcd42-default-rtdb.firebaseio.com/.json
+                </div>
+            </div>
+            
+            <!-- Response Section -->
+            <div class="test-card response-section">
+                <h2>📄 Response</h2>
+                <div>Status: <span id="response-status">Ready</span></div>
+                <div id="response-area" class="response-area">Click any test button to see results...</div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function getServerUrl() {
+            return document.getElementById('server-url').value || 'http://localhost:5000';
+        }
+        
+        function updateResponse(data, isError = false) {
+            const statusEl = document.getElementById('response-status');
+            const responseEl = document.getElementById('response-area');
+            
+            statusEl.textContent = isError ? 'Error' : 'Success';
+            statusEl.className = isError ? 'status-error' : 'status-success';
+            
+            responseEl.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+            responseEl.scrollTop = 0;
+        }
+        
+        async function makeRequest(url, options = {}) {
+            try {
+                updateResponse('Making request...', false);
+                const response = await fetch(url, options);
+                const data = await response.json();
+                
+                const result = {
+                    status: response.status,
+                    statusText: response.statusText,
+                    url: url,
+                    data: data
+                };
+                
+                updateResponse(result, !response.ok);
+                return data;
+            } catch (error) {
+                updateResponse(`Request failed: ${error.message}`, true);
+                throw error;
+            }
+        }
+        
+        // Task Tests
+        async function testAddTask() {
+            const text = document.getElementById('task-text').value;
+            const date = document.getElementById('task-date').value;
+            
+            if (!text) {
+                updateResponse('Task text is required', true);
+                return;
+            }
+            
+            let url = `${getServerUrl()}/siri/add-task?text=${encodeURIComponent(text)}`;
+            if (date) {
+                url += `&date=${date}`;
+            }
+            
+            await makeRequest(url);
+        }
+        
+        async function testGetTasks() {
+            await makeRequest(`${getServerUrl()}/tasks`);
+        }
+        
+        async function testGetTasksByDate() {
+            const date = document.getElementById('task-date').value || new Date().toISOString().split('T')[0];
+            await makeRequest(`${getServerUrl()}/tasks/${date}`);
+        }
+        
+        // Transaction Tests
+        async function testAddTransaction() {
+            const message = document.getElementById('sms-message').value;
+            
+            if (!message) {
+                updateResponse('SMS message is required', true);
+                return;
+            }
+            
+            const url = `${getServerUrl()}/siri/addTransaction?message=${encodeURIComponent(message)}`;
+            await makeRequest(url);
+        }
+        
+        async function testGetTransactions() {
+            await makeRequest(`${getServerUrl()}/transactions`);
+        }
+        
+        // System Tests
+        async function testHealth() {
+            await makeRequest(`${getServerUrl()}/health`);
+        }
+        
+        async function testApiInfo() {
+            await makeRequest(`${getServerUrl()}/`);
+        }
+        
+        // Firebase Tests
+        async function testFirebaseRead() {
+            await makeRequest('https://dashboard-app-fcd42-default-rtdb.firebaseio.com/.json');
+        }
+        
+        async function testFirebaseTasks() {
+            await makeRequest('https://dashboard-app-fcd42-default-rtdb.firebaseio.com/tasks.json');
+        }
+        
+        async function testFirebaseTransactions() {
+            await makeRequest('https://dashboard-app-fcd42-default-rtdb.firebaseio.com/transactions.json');
+        }
+        
+        // Utility Functions
+        function clearResponse() {
+            document.getElementById('response-status').textContent = 'Ready';
+            document.getElementById('response-status').className = '';
+            document.getElementById('response-area').textContent = 'Response cleared...';
+        }
+        
+        function loadSampleCredit() {
+            document.getElementById('sms-message').value = 'Credit Alert! Rs.47500.00 credited to HDFC Bank A/c XX7312 on 15-07-25 from VPA 9010853978-2@ybl (UPI 140900298282)';
+        }
+        
+        function loadSampleDebit() {
+            document.getElementById('sms-message').value = 'UPDATE: INR 5,000.00 debited from HDFC Bank XX7312 on 10-JUL-25. Info: ACH D- RACPC KUKATPALLY HYD-NODNHTSYM250. Avl bal:INR 96,103.57';
+        }
+        
+        // Set today's date by default
+        document.getElementById('task-date').value = new Date().toISOString().split('T')[0];
+        
+        // Auto-test on load
+        setTimeout(() => {
+            testHealth();
+        }, 1000);
+    </script>
+</body>
+</html>

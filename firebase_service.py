@@ -14,14 +14,14 @@ class FirebaseService:
             if response.status_code == 200:
                 data = response.json()
                 if data is None:
-                    return self._get_default_data()
+                    return {}
                 return data
             else:
                 print(f"Error fetching data: {response.status_code}")
-                return self._get_default_data()
+                return {}
         except Exception as e:
             print(f"Firebase get_data error: {e}")
-            return self._get_default_data()
+            return {}
     
     def save_data(self, data: Dict) -> bool:
         """Save data to Firebase"""
@@ -38,12 +38,16 @@ class FirebaseService:
             data = self.get_data()
             date = task_data.get('date', datetime.now().strftime('%Y-%m-%d'))
             
-            if 'tasks' not in data:
-                data['tasks'] = {}
-            if date not in data['tasks']:
-                data['tasks'][date] = []
+            # Initialize structure if needed
+            if not isinstance(data, dict):
+                data = {}
+            if date not in data:
+                data[date] = []
             
-            data['tasks'][date].append(task_data)
+            # Remove date from task_data before adding
+            task_copy = {k: v for k, v in task_data.items() if k != 'date'}
+            data[date].append(task_copy)
+            
             return self.save_data(data)
         except Exception as e:
             print(f"Firebase add_task error: {e}")

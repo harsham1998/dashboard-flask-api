@@ -243,6 +243,7 @@
                 
                 <button class="btn" onclick="testDebugEnv()">Environment Variables</button>
                 <button class="btn" onclick="testDebugScheduler()">Scheduler Status</button>
+                <button class="btn" onclick="testTriggerScheduler()">Trigger Scheduler Manually</button>
                 <button class="btn" onclick="testOAuthCallback()">OAuth Callback Test</button>
                 
                 <div class="form-group">
@@ -440,6 +441,10 @@
         
         async function testDebugScheduler() {
             await makeRequest(`${getServerUrl()}/debug/scheduler`);
+        }
+        
+        async function testTriggerScheduler() {
+            await makeRequest(`${getServerUrl()}/debug/trigger-scheduler`);
         }
         
         async function testOAuthCallback() {

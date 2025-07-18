@@ -51,10 +51,31 @@ def home():
             'GET /tasks/<date>': 'Get tasks for specific date',
             'GET /siri/add-task': 'Add task via Siri (text query param)',
             'GET /siri/addTransaction': 'Add transaction via Siri (message param)',
-            'GET /transactions': 'Get recent transactions'
+            'GET /transactions': 'Get recent transactions',
+            'GET /test_api.html': 'API Testing Interface'
         },
         'time': datetime.now().isoformat()
     })
+
+@app.route('/test_api.html')
+def serve_test_api():
+    """Serve the test API HTML interface"""
+    try:
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        test_api_path = os.path.join(current_dir, 'test_api.html')
+        
+        with open(test_api_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        from flask import Response
+        return Response(content, mimetype='text/html')
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to load test API interface',
+            'message': str(e)
+        }), 500
 
 @app.route('/health')
 def health():
@@ -111,6 +132,24 @@ def debug_scheduler():
         },
         'time_until_next_run': str(next_run_utc - datetime.now()) if next_run_utc else None
     })
+
+@app.route('/debug/trigger-scheduler')
+def trigger_scheduler():
+    """Manually trigger the Gmail scheduler for testing"""
+    try:
+        print("🔄 Manually triggering Gmail scheduler...")
+        check_all_users_gmail()
+        return jsonify({
+            'success': True,
+            'message': 'Scheduler triggered successfully',
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 @app.route('/user/connections', methods=['POST'])
 def get_user_connections():
@@ -709,8 +748,24 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
     try:
         access_token = gmail_tokens['access_token']
         
-        # Build search query for broader email search
-        search_query = 'transaction OR payment OR purchase OR charge OR debit OR receipt OR invoice OR bank OR card OR upi OR transfer OR credited OR debited'
+        # Build comprehensive search query for transaction-related emails
+        search_query_parts = [
+            # Financial terms
+            'transaction', 'payment', 'purchase', 'charge', 'debit', 'credit', 'receipt', 'invoice',
+            # Indian banking terms
+            'bank', 'upi', 'transfer', 'credited', 'debited', 'rs', 'inr', 'rupees',
+            # Bank names
+            'hdfc', 'icici', 'sbi', 'axis', 'kotak', 'pnb', 'canara', 'union',
+            # Digital wallets
+            'paytm', 'phonepe', 'googlepay', 'amazonpay', 'mobikwik', 'freecharge',
+            # Card companies
+            'visa', 'mastercard', 'rupay',
+            # Common transaction terms
+            'alert', 'notification', 'statement', 'balance', 'withdraw', 'deposit'
+        ]
+        
+        # Create search query with OR conditions
+        search_query = ' OR '.join(search_query_parts)
         
         # Add time filter
         if minutes > 60:
@@ -720,9 +775,19 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
             search_query += f' newer_than:{minutes}m'
         
         print(f"Gmail search query: {search_query}")
+        print(f"Searching for emails in last {minutes} minutes...")
         
         # Get emails from Gmail API
         email_list = search_gmail_emails(access_token, search_query, max_results=50)
+        
+        print(f"Found {len(email_list)} emails from Gmail API")
+        
+        # If no emails found with transaction terms, try a broader search
+        if not email_list:
+            print("No emails found with transaction terms, trying broader search...")
+            broader_query = f'newer_than:{minutes}m'
+            email_list = search_gmail_emails(access_token, broader_query, max_results=20)
+            print(f"Found {len(email_list)} emails with broader search")
         
         # IST timezone
         ist_tz = pytz.timezone('Asia/Kolkata')
@@ -1018,7 +1083,7 @@ def get_gmail_transactions():
 
 # Helper functions for Gmail API
 def search_gmail_emails(access_token, query, max_results=50):
-    """Search Gmail emails"""
+    """Search Gmail emails with enhanced debugging"""
     try:
         headers = {'Authorization': f'Bearer {access_token}'}
         
@@ -1027,17 +1092,25 @@ def search_gmail_emails(access_token, query, max_results=50):
             'maxResults': max_results
         }
         
+        print(f"Making Gmail API request with query: {query}")
+        print(f"Max results: {max_results}")
+        
         response = requests.get(
             'https://gmail.googleapis.com/gmail/v1/users/me/messages',
             headers=headers,
             params=params
         )
         
+        print(f"Gmail API response status: {response.status_code}")
+        
         if response.ok:
             data = response.json()
-            return data.get('messages', [])
+            messages = data.get('messages', [])
+            print(f"Gmail API returned {len(messages)} messages")
+            return messages
         else:
             print(f"Gmail search error: {response.status_code}")
+            print(f"Response content: {response.text}")
             return []
             
     except Exception as e:
@@ -1362,7 +1435,7 @@ def get_gmail_transactions_for_user(gmail_tokens, user_email, last_check, minute
         return []
 
 def store_user_transaction_in_file(user_email, transaction):
-    """Store transaction in user's individual JSON file"""
+    """Store transaction in user's individual JSON file with duplicate checking"""
     try:
         # Create safe filename from email
         safe_email = user_email.replace('@', '_at_').replace('.', '_dot_')
@@ -1380,6 +1453,31 @@ def store_user_transaction_in_file(user_email, transaction):
         if 'transactions' not in user_data:
             user_data['transactions'] = []
         
+        # Check for duplicate transactions
+        transaction_id = transaction.get('id')
+        existing_ids = [t.get('id') for t in user_data['transactions']]
+        
+        if transaction_id in existing_ids:
+            print(f"Transaction {transaction_id} already exists for user {user_email}, skipping...")
+            return False
+        
+        # Also check by amount, date, and merchant for similar transactions
+        new_amount = transaction.get('amount')
+        new_date = transaction.get('date', '')[:10]  # Just the date part
+        new_merchant = transaction.get('merchant', '')
+        
+        for existing_tx in user_data['transactions']:
+            existing_amount = existing_tx.get('amount')
+            existing_date = existing_tx.get('date', '')[:10]
+            existing_merchant = existing_tx.get('merchant', '')
+            
+            # Check if it's the same transaction (same amount, date, merchant)
+            if (existing_amount == new_amount and 
+                existing_date == new_date and 
+                existing_merchant == new_merchant):
+                print(f"Similar transaction found for user {user_email}, skipping duplicate...")
+                return False
+        
         # Add new transaction to beginning of list
         user_data['transactions'].insert(0, transaction)
         
@@ -1390,6 +1488,7 @@ def store_user_transaction_in_file(user_email, transaction):
         # Save back to Firebase
         response = requests.put(f"{firebase.base_url}/{filename}", json=user_data)
         
+        print(f"Stored new transaction {transaction_id} for user {user_email}")
         return response.ok
         
     except Exception as e:
@@ -1446,8 +1545,15 @@ def start_background_services():
     
     print("Background services started")
 
-if __name__ == '__main__':
-    # Start background services
+# Auto-start background services when module is imported
+def initialize_scheduler():
+    """Initialize scheduler automatically when module is imported"""
+    print("🔄 Initializing Gmail scheduler...")
     start_background_services()
-    
+
+# Initialize scheduler when module is imported
+initialize_scheduler()
+
+if __name__ == '__main__':
+    # Background services are already started by initialize_scheduler()
     app.run(debug=True, host='0.0.0.0', port=5000)

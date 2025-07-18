@@ -323,24 +323,38 @@ def gmail_oauth_callback():
         )
         
         if not token_response.ok:
-            return '''
+            # Log the error details for debugging
+            error_details = f"Status: {token_response.status_code}, Response: {token_response.text}"
+            print(f"Token exchange failed: {error_details}")
+            print(f"Request data: {token_data}")
+            
+            return f'''
             <!DOCTYPE html>
             <html>
             <head>
                 <title>Gmail Authentication</title>
                 <style>
-                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-                    .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                    .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
-                    h1 { color: #333; margin-bottom: 10px; }
-                    p { color: #666; }
+                    body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }}
+                    .container {{ max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                    .error {{ color: #e74c3c; font-size: 48px; margin-bottom: 20px; }}
+                    h1 {{ color: #333; margin-bottom: 10px; }}
+                    p {{ color: #666; margin-bottom: 10px; }}
+                    .debug {{ background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 12px; text-align: left; }}
                 </style>
             </head>
             <body>
                 <div class="container">
                     <div class="error">❌</div>
                     <h1>Token Exchange Failed</h1>
-                    <p>Failed to exchange authorization code for tokens. Please try again.</p>
+                    <p>Failed to exchange authorization code for tokens.</p>
+                    <div class="debug">
+                        <strong>Debug Info:</strong><br>
+                        Status: {token_response.status_code}<br>
+                        Client ID: {GMAIL_CONFIG['client_id']}<br>
+                        Client Secret: {'Set' if GMAIL_CONFIG['client_secret'] else 'Missing'}<br>
+                        Redirect URI: {GMAIL_CONFIG['redirect_uri']}<br>
+                        Error: {token_response.text}
+                    </div>
                 </div>
             </body>
             </html>

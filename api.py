@@ -1,7 +1,11 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 from datetime import datetime
 import time
+import requests
+import base64
+import re
+from email.utils import parsedate_to_datetime
 from firebase_service import FirebaseService
 from text_processor import TextProcessor
 
@@ -11,6 +15,15 @@ CORS(app)  # Enable CORS for all routes
 # Initialize services
 firebase = FirebaseService()
 text_processor = TextProcessor()
+
+# Gmail OAuth Configuration
+import os
+GMAIL_CONFIG = {
+    'client_id': os.environ.get('GMAIL_CLIENT_ID'),
+    'client_secret': os.environ.get('GMAIL_CLIENT_SECRET'),
+    'redirect_uri': 'https://dashboard-flask-api.onrender.com/oauth/gmail/callback',
+    'scope': 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email'
+}
 
 @app.route('/')
 def home():
@@ -236,6 +249,565 @@ def get_transactions():
             'success': False,
             'error': str(e)
         }), 500
+
+# Gmail OAuth Endpoints
+@app.route('/oauth/gmail/callback', methods=['GET'])
+def gmail_oauth_callback():
+    """Handle OAuth callback from Google"""
+    try:
+        # Get authorization code and state from URL parameters
+        code = request.args.get('code')
+        error = request.args.get('error')
+        state = request.args.get('state')  # This is the user's email
+        
+        if error:
+            return '''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Gmail Authentication</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                    .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                    .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
+                    h1 { color: #333; margin-bottom: 10px; }
+                    p { color: #666; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error">❌</div>
+                    <h1>Authentication Failed</h1>
+                    <p>Gmail authentication was cancelled or failed. You can close this window and try again.</p>
+                </div>
+            </body>
+            </html>
+            '''
+        
+        if not code:
+            return '''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Gmail Authentication</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                    .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                    .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
+                    h1 { color: #333; margin-bottom: 10px; }
+                    p { color: #666; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error">❌</div>
+                    <h1>No Authorization Code</h1>
+                    <p>No authorization code received. Please try again.</p>
+                </div>
+            </body>
+            </html>
+            '''
+        
+        # Exchange authorization code for tokens
+        token_data = {
+            'client_id': GMAIL_CONFIG['client_id'],
+            'client_secret': GMAIL_CONFIG['client_secret'],
+            'code': code,
+            'grant_type': 'authorization_code',
+            'redirect_uri': GMAIL_CONFIG['redirect_uri']
+        }
+        
+        token_response = requests.post(
+            'https://oauth2.googleapis.com/token',
+            data=token_data
+        )
+        
+        if not token_response.ok:
+            return '''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Gmail Authentication</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                    .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                    .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
+                    h1 { color: #333; margin-bottom: 10px; }
+                    p { color: #666; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error">❌</div>
+                    <h1>Token Exchange Failed</h1>
+                    <p>Failed to exchange authorization code for tokens. Please try again.</p>
+                </div>
+            </body>
+            </html>
+            '''
+        
+        tokens = token_response.json()
+        
+        if 'error' in tokens:
+            return f'''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Gmail Authentication</title>
+                <style>
+                    body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }}
+                    .container {{ max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                    .error {{ color: #e74c3c; font-size: 48px; margin-bottom: 20px; }}
+                    h1 {{ color: #333; margin-bottom: 10px; }}
+                    p {{ color: #666; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error">❌</div>
+                    <h1>Authentication Error</h1>
+                    <p>Error: {tokens['error']}. Please try again.</p>
+                </div>
+            </body>
+            </html>
+            '''
+        
+        # Store tokens directly in Firebase
+        if state:  # state contains user email
+            try:
+                user_email_key = state.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
+                
+                # Get existing user data using Firebase service
+                user_data = firebase.get_user_data(user_email_key)
+                
+                if user_data:
+                    # Add Gmail tokens to user data
+                    user_data['gmailTokens'] = {
+                        'access_token': tokens['access_token'],
+                        'refresh_token': tokens['refresh_token'],
+                        'expires_in': tokens['expires_in'],
+                        'token_type': tokens['token_type'],
+                        'scope': tokens['scope'],
+                        'created_at': datetime.now().isoformat(),
+                        'connected': True
+                    }
+                    
+                    # Save back to Firebase using Firebase service
+                    firebase.update_user_data(user_email_key, user_data)
+                    
+                    print(f'Gmail tokens stored for user: {state}')
+                    
+                    # Return success page
+                    return '''
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Gmail Authentication</title>
+                        <style>
+                            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                            .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                            .success { color: #27ae60; font-size: 48px; margin-bottom: 20px; }
+                            h1 { color: #333; margin-bottom: 10px; }
+                            p { color: #666; }
+                        </style>
+                        <script>
+                            // Auto-close after 3 seconds
+                            setTimeout(function() {
+                                window.close();
+                            }, 3000);
+                        </script>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="success">✅</div>
+                            <h1>Gmail Connected Successfully!</h1>
+                            <p>Your Gmail account has been connected. This window will close automatically.</p>
+                        </div>
+                    </body>
+                    </html>
+                    '''
+                else:
+                    return '''
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Gmail Authentication</title>
+                        <style>
+                            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                            .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                            .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
+                            h1 { color: #333; margin-bottom: 10px; }
+                            p { color: #666; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="error">❌</div>
+                            <h1>User Not Found</h1>
+                            <p>User data not found. Please make sure you're logged in to the dashboard.</p>
+                        </div>
+                    </body>
+                    </html>
+                    '''
+            except Exception as e:
+                print(f'Error storing Gmail tokens: {str(e)}')
+                return f'''
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Gmail Authentication</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }}
+                        .container {{ max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                        .error {{ color: #e74c3c; font-size: 48px; margin-bottom: 20px; }}
+                        h1 {{ color: #333; margin-bottom: 10px; }}
+                        p {{ color: #666; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="error">❌</div>
+                        <h1>Storage Error</h1>
+                        <p>Failed to store Gmail tokens: {str(e)}</p>
+                    </div>
+                </body>
+                </html>
+                '''
+        
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Gmail Authentication</title>
+            <style>
+                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
+                h1 { color: #333; margin-bottom: 10px; }
+                p { color: #666; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="error">❌</div>
+                <h1>Missing User Information</h1>
+                <p>No user email provided in the authentication request.</p>
+            </div>
+        </body>
+        </html>
+        '''
+        
+    except Exception as e:
+        print(f"OAuth callback error: {str(e)}")
+        return f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Gmail Authentication</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }}
+                .container {{ max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                .error {{ color: #e74c3c; font-size: 48px; margin-bottom: 20px; }}
+                h1 {{ color: #333; margin-bottom: 10px; }}
+                p {{ color: #666; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="error">❌</div>
+                <h1>Callback Error</h1>
+                <p>An error occurred during the OAuth callback: {str(e)}</p>
+            </div>
+        </body>
+        </html>
+        '''
+
+@app.route('/oauth/gmail/refresh', methods=['POST'])
+def refresh_gmail_token():
+    """Refresh Gmail access token"""
+    try:
+        data = request.get_json()
+        refresh_token = data.get('refresh_token')
+        user_email = data.get('userEmail')
+        
+        if not refresh_token:
+            return jsonify({'error': 'Refresh token required'}), 400
+        
+        # Refresh token with Google
+        token_data = {
+            'client_id': GMAIL_CONFIG['client_id'],
+            'client_secret': GMAIL_CONFIG['client_secret'],
+            'refresh_token': refresh_token,
+            'grant_type': 'refresh_token'
+        }
+        
+        response = requests.post(
+            'https://oauth2.googleapis.com/token',
+            data=token_data
+        )
+        
+        if not response.ok:
+            return jsonify({'error': 'Token refresh failed'}), 400
+        
+        tokens = response.json()
+        
+        if 'error' in tokens:
+            return jsonify({'error': tokens['error']}), 400
+        
+        return jsonify({'tokens': tokens})
+        
+    except Exception as e:
+        print(f"Token refresh error: {str(e)}")
+        return jsonify({'error': 'Failed to refresh token'}), 500
+
+@app.route('/gmail/transactions', methods=['POST'])
+def get_gmail_transactions():
+    """Get transactions from Gmail emails"""
+    try:
+        data = request.get_json()
+        user_email = data.get('userEmail')
+        last_check = data.get('lastCheck')
+        
+        if not user_email:
+            return jsonify({'error': 'User email required'}), 400
+        
+        # Get user's Gmail tokens from Firebase
+        user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
+        user_data = firebase.get_user_data(user_email_key)
+        
+        if not user_data or 'gmailTokens' not in user_data:
+            return jsonify({'error': 'No Gmail tokens found'}), 400
+        
+        tokens = user_data['gmailTokens']
+        
+        # Search for transaction emails
+        transactions = []
+        
+        # Build search query
+        search_query = 'transaction OR payment OR purchase OR charge OR debit OR receipt OR invoice OR bank OR card'
+        
+        if last_check:
+            # Only get emails since last check
+            try:
+                last_check_date = datetime.fromisoformat(last_check.replace('Z', '+00:00'))
+                days_ago = (datetime.now() - last_check_date).days
+                if days_ago > 0:
+                    search_query += f' newer_than:{days_ago}d'
+            except:
+                pass  # If date parsing fails, get all recent emails
+        
+        # Get emails from Gmail API
+        emails = search_gmail_emails(tokens['access_token'], search_query)
+        
+        for email_data in emails:
+            # Get full email content
+            email = get_gmail_email(tokens['access_token'], email_data['id'])
+            
+            if email:
+                # Extract transaction data
+                transaction = extract_transaction_from_email(email)
+                if transaction:
+                    transactions.append(transaction)
+        
+        return jsonify({'transactions': transactions})
+        
+    except Exception as e:
+        print(f"Get transactions error: {str(e)}")
+        return jsonify({'error': 'Failed to get transactions'}), 500
+
+# Helper functions for Gmail API
+def search_gmail_emails(access_token, query, max_results=50):
+    """Search Gmail emails"""
+    try:
+        headers = {'Authorization': f'Bearer {access_token}'}
+        
+        params = {
+            'q': query,
+            'maxResults': max_results
+        }
+        
+        response = requests.get(
+            'https://gmail.googleapis.com/gmail/v1/users/me/messages',
+            headers=headers,
+            params=params
+        )
+        
+        if response.ok:
+            data = response.json()
+            return data.get('messages', [])
+        else:
+            print(f"Gmail search error: {response.status_code}")
+            return []
+            
+    except Exception as e:
+        print(f"Search emails error: {str(e)}")
+        return []
+
+def get_gmail_email(access_token, message_id):
+    """Get full Gmail email content"""
+    try:
+        headers = {'Authorization': f'Bearer {access_token}'}
+        
+        response = requests.get(
+            f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}',
+            headers=headers,
+            params={'format': 'full'}
+        )
+        
+        if response.ok:
+            return response.json()
+        else:
+            print(f"Gmail get email error: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        print(f"Get email error: {str(e)}")
+        return None
+
+def extract_transaction_from_email(email):
+    """Extract transaction data from email"""
+    try:
+        payload = email.get('payload', {})
+        headers = payload.get('headers', [])
+        
+        # Get email metadata
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
+        sender = next((h['value'] for h in headers if h['name'] == 'From'), '')
+        date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
+        
+        # Get email body
+        body = extract_email_body(payload)
+        
+        # Extract transaction details
+        transaction = parse_transaction_data(subject, body, sender, date)
+        
+        if transaction:
+            transaction['emailId'] = email['id']
+            transaction['emailSubject'] = subject
+            transaction['emailFrom'] = sender
+            transaction['emailDate'] = date
+            
+        return transaction
+        
+    except Exception as e:
+        print(f"Extract transaction error: {str(e)}")
+        return None
+
+def extract_email_body(payload):
+    """Extract text content from email payload"""
+    body = ""
+    
+    if 'parts' in payload:
+        # Multi-part email
+        for part in payload['parts']:
+            if part['mimeType'] in ['text/plain', 'text/html']:
+                if 'data' in part.get('body', {}):
+                    body += base64.urlsafe_b64decode(
+                        part['body']['data'].encode('ASCII')
+                    ).decode('utf-8')
+    else:
+        # Single part email
+        if 'data' in payload.get('body', {}):
+            body = base64.urlsafe_b64decode(
+                payload['body']['data'].encode('ASCII')
+            ).decode('utf-8')
+    
+    return body
+
+def parse_transaction_data(subject, body, sender, date):
+    """Parse transaction data from email content"""
+    text = f"{subject} {body}".lower()
+    
+    # Amount patterns
+    amount_patterns = [
+        r'\$([0-9,]+\.?\d{0,2})',
+        r'amount:?\s*\$?([0-9,]+\.?\d{0,2})',
+        r'charged?\s*\$?([0-9,]+\.?\d{0,2})',
+        r'paid?\s*\$?([0-9,]+\.?\d{0,2})'
+    ]
+    
+    # Find amount
+    amount = None
+    for pattern in amount_patterns:
+        match = re.search(pattern, text)
+        if match:
+            amount_str = match.group(1).replace(',', '')
+            try:
+                amount = float(amount_str)
+                if amount > 0:
+                    break
+            except ValueError:
+                continue
+    
+    if not amount:
+        return None
+    
+    # Extract merchant
+    merchant_patterns = [
+        r'(?:at|from|to)\s+([a-zA-Z0-9\s&.-]+?)\s+(?:on|for|was|has)',
+        r'merchant:?\s*([a-zA-Z0-9\s&.-]+)',
+        r'purchase\s+(?:at|from)\s+([a-zA-Z0-9\s&.-]+)'
+    ]
+    
+    merchant = 'Unknown'
+    for pattern in merchant_patterns:
+        match = re.search(pattern, text)
+        if match:
+            merchant = match.group(1).strip()
+            break
+    
+    # Determine transaction type
+    is_credit = bool(re.search(r'received|refund|deposit|credit|cashback', text))
+    transaction_type = 'credit' if is_credit else 'debit'
+    
+    # Extract card info
+    card_match = re.search(r'\*{4}(\d{4})|ending\s+in\s+(\d{4})', text)
+    account = f"****{card_match.group(1) or card_match.group(2)}" if card_match else 'Unknown'
+    
+    # Parse date
+    transaction_date = datetime.now().isoformat()
+    if date:
+        try:
+            # Parse email date
+            parsed_date = parsedate_to_datetime(date)
+            transaction_date = parsed_date.isoformat()
+        except:
+            pass
+    
+    return {
+        'id': f"gmail_{int(datetime.now().timestamp())}_{email['id'][:8]}",
+        'amount': amount,
+        'currency': 'USD',
+        'date': transaction_date,
+        'merchant': merchant,
+        'type': transaction_type,
+        'account': account,
+        'category': categorize_transaction(merchant, text),
+        'description': subject,
+        'source': 'gmail',
+        'processed': True,
+        'verified': False
+    }
+
+def categorize_transaction(merchant, text):
+    """Categorize transaction based on merchant and content"""
+    categories = {
+        'shopping': ['amazon', 'walmart', 'target', 'ebay', 'etsy'],
+        'food': ['restaurant', 'mcdonald', 'starbucks', 'pizza', 'food'],
+        'gas': ['shell', 'exxon', 'bp', 'chevron', 'gas', 'fuel'],
+        'entertainment': ['netflix', 'spotify', 'hulu', 'disney', 'movie'],
+        'utilities': ['electric', 'water', 'gas', 'internet', 'phone'],
+        'healthcare': ['pharmacy', 'doctor', 'hospital', 'medical'],
+        'transport': ['uber', 'lyft', 'taxi', 'bus', 'train']
+    }
+    
+    combined_text = f"{merchant} {text}".lower()
+    
+    for category, keywords in categories.items():
+        if any(keyword in combined_text for keyword in keywords):
+            return category
+    
+    return 'other'
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

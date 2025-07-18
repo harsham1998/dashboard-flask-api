@@ -66,6 +66,17 @@ def debug_env():
         }
     })
 
+@app.route('/debug/scheduler')
+def debug_scheduler():
+    """Debug endpoint to check scheduler status"""
+    return jsonify({
+        'scheduler_running': True,
+        'scheduled_jobs': [str(job) for job in schedule.jobs],
+        'next_run': str(schedule.next_run()) if schedule.jobs else None,
+        'current_time': datetime.now().isoformat(),
+        'gmail_check_interval': '5 minutes'
+    })
+
 @app.route('/user/connections', methods=['POST'])
 def get_user_connections():
     """Get user's email connections"""
@@ -658,6 +669,66 @@ def refresh_gmail_token():
         print(f"Token refresh error: {str(e)}")
         return jsonify({'error': 'Failed to refresh token'}), 500
 
+@app.route('/gmail/check-now', methods=['POST'])
+def check_gmail_now():
+    """Manually check Gmail for transactions (last 5 minutes)"""
+    try:
+        data = request.get_json()
+        user_email = data.get('userEmail')
+        
+        if not user_email:
+            return jsonify({'error': 'User email required'}), 400
+        
+        # Get user's Gmail tokens from Firebase
+        user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
+        user_data = firebase.get_user_data(user_email_key)
+        
+        if not user_data or 'gmailTokens' not in user_data:
+            return jsonify({'error': 'No Gmail tokens found'}), 400
+        
+        tokens = user_data['gmailTokens']
+        
+        if not tokens.get('connected') or not tokens.get('access_token'):
+            return jsonify({'error': 'Gmail not connected or no access token'}), 400
+        
+        print(f"Manual Gmail check requested for user: {user_email}")
+        
+        # Get transactions from last 5 minutes
+        transactions = get_gmail_transactions_for_user(tokens, user_email, None, minutes=5)
+        
+        if transactions:
+            print(f"Found {len(transactions)} new transactions for {user_email}")
+            
+            # Store transactions in user's individual JSON file
+            stored_count = 0
+            for transaction in transactions:
+                success = store_user_transaction_in_file(user_email, transaction)
+                if success:
+                    stored_count += 1
+            
+            # Update last check time
+            tokens['last_email_check'] = datetime.now().isoformat()
+            user_data['gmailTokens'] = tokens
+            firebase.update_user_data(user_email_key, user_data)
+            
+            return jsonify({
+                'success': True,
+                'transactions_found': len(transactions),
+                'transactions_stored': stored_count,
+                'transactions': transactions
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'transactions_found': 0,
+                'transactions_stored': 0,
+                'message': 'No new transactions found in the last 5 minutes'
+            })
+        
+    except Exception as e:
+        print(f"Manual Gmail check error: {str(e)}")
+        return jsonify({'error': f'Failed to check Gmail: {str(e)}'}), 500
+
 @app.route('/gmail/transactions', methods=['POST'])
 def get_gmail_transactions():
     """Get transactions from Gmail emails"""
@@ -941,15 +1012,15 @@ def check_all_users_gmail():
             last_check = gmail_tokens.get('last_email_check')
             
             try:
-                # Get transactions from Gmail
-                transactions = get_gmail_transactions_for_user(gmail_tokens, user_email, last_check)
+                # Get transactions from Gmail (last 5 minutes)
+                transactions = get_gmail_transactions_for_user(gmail_tokens, user_email, last_check, minutes=5)
                 
                 if transactions:
                     print(f"Found {len(transactions)} new transactions for {user_email}")
                     
-                    # Store transactions in Firebase under user's transactions
+                    # Store transactions in user's individual JSON file
                     for transaction in transactions:
-                        success = store_user_transaction(user_key, transaction)
+                        success = store_user_transaction_in_file(user_email, transaction)
                         if success:
                             transaction_count += 1
                 
@@ -969,7 +1040,7 @@ def check_all_users_gmail():
     except Exception as e:
         print(f"Error in check_all_users_gmail: {str(e)}")
 
-def get_gmail_transactions_for_user(gmail_tokens, user_email, last_check):
+def get_gmail_transactions_for_user(gmail_tokens, user_email, last_check, minutes=5):
     """Get transactions from Gmail for a specific user"""
     try:
         access_token = gmail_tokens['access_token']
@@ -977,16 +1048,23 @@ def get_gmail_transactions_for_user(gmail_tokens, user_email, last_check):
         # Build search query
         search_query = 'transaction OR payment OR purchase OR charge OR debit OR receipt OR invoice OR bank OR card'
         
-        # Only get emails since last check (last 6 hours if no last check)
+        # Only get emails from last X minutes (default 5)
         if last_check:
             try:
                 last_check_date = datetime.fromisoformat(last_check.replace('Z', '+00:00'))
-                hours_ago = max(1, int((datetime.now() - last_check_date).total_seconds() / 3600))
-                search_query += f' newer_than:{hours_ago}h'
+                minutes_ago = max(1, int((datetime.now() - last_check_date).total_seconds() / 60))
+                # Use hours if more than 60 minutes
+                if minutes_ago > 60:
+                    hours_ago = max(1, int(minutes_ago / 60))
+                    search_query += f' newer_than:{hours_ago}h'
+                else:
+                    search_query += f' newer_than:{minutes_ago}m'
             except:
-                search_query += ' newer_than:6h'  # Default to 6 hours
+                search_query += f' newer_than:{minutes}m'  # Default to specified minutes
         else:
-            search_query += ' newer_than:6h'  # Default to 6 hours
+            search_query += f' newer_than:{minutes}m'  # Default to specified minutes
+        
+        print(f"Gmail search query: {search_query}")
         
         # Get emails from Gmail API
         emails = search_gmail_emails(access_token, search_query, max_results=20)
@@ -1011,8 +1089,43 @@ def get_gmail_transactions_for_user(gmail_tokens, user_email, last_check):
         print(f"Error getting Gmail transactions for {user_email}: {str(e)}")
         return []
 
+def store_user_transaction_in_file(user_email, transaction):
+    """Store transaction in user's individual JSON file"""
+    try:
+        # Create safe filename from email
+        safe_email = user_email.replace('@', '_at_').replace('.', '_dot_')
+        filename = f"{safe_email}.json"
+        
+        # Get existing transactions from user's file
+        response = requests.get(f"{firebase.base_url}/{filename}")
+        
+        if response.ok:
+            user_data = response.json() or {}
+        else:
+            user_data = {}
+        
+        # Initialize transactions array if not exists
+        if 'transactions' not in user_data:
+            user_data['transactions'] = []
+        
+        # Add new transaction to beginning of list
+        user_data['transactions'].insert(0, transaction)
+        
+        # Keep only last 50 transactions
+        if len(user_data['transactions']) > 50:
+            user_data['transactions'] = user_data['transactions'][:50]
+        
+        # Save back to Firebase
+        response = requests.put(f"{firebase.base_url}/{filename}", json=user_data)
+        
+        return response.ok
+        
+    except Exception as e:
+        print(f"Error storing transaction for user {user_email}: {str(e)}")
+        return False
+
 def store_user_transaction(user_key, transaction):
-    """Store transaction in user's Firebase transactions"""
+    """Store transaction in user's Firebase transactions (legacy method)"""
     try:
         # Get user's existing transactions
         response = requests.get(f"{firebase.base_url}/users/{user_key}/transactions.json")

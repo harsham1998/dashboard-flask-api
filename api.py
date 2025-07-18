@@ -64,6 +64,52 @@ def debug_env():
         }
     })
 
+@app.route('/user/connections', methods=['POST'])
+def get_user_connections():
+    """Get user's email connections"""
+    try:
+        data = request.get_json()
+        user_email = data.get('userEmail')
+        
+        if not user_email:
+            return jsonify({'error': 'User email required'}), 400
+        
+        # Get user data from Firebase
+        user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
+        user_data = firebase.get_user_data(user_email_key)
+        
+        if not user_data:
+            return jsonify({
+                'connections': {
+                    'gmail': {'connected': False},
+                    'outlook': {'connected': False}
+                }
+            })
+        
+        # Check Gmail connection
+        gmail_connected = 'gmailTokens' in user_data and user_data['gmailTokens'].get('connected', False)
+        gmail_info = {}
+        if gmail_connected:
+            gmail_info = {
+                'connected': True,
+                'email': user_data.get('email', user_email),
+                'connectedAt': user_data['gmailTokens'].get('created_at'),
+                'scope': user_data['gmailTokens'].get('scope', '')
+            }
+        else:
+            gmail_info = {'connected': False}
+        
+        return jsonify({
+            'connections': {
+                'gmail': gmail_info,
+                'outlook': {'connected': False}  # Not implemented yet
+            }
+        })
+        
+    except Exception as e:
+        print(f"Get user connections error: {str(e)}")
+        return jsonify({'error': 'Failed to get user connections'}), 500
+
 # Task endpoints
 @app.route('/tasks', methods=['GET'])
 def get_tasks():

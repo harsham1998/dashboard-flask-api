@@ -8,6 +8,8 @@ import re
 from email.utils import parsedate_to_datetime
 from firebase_service import FirebaseService
 from text_processor import TextProcessor
+import threading
+import schedule
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -905,5 +907,162 @@ def categorize_transaction(merchant, text):
     
     return 'other'
 
+# Background email checking service
+def check_all_users_gmail():
+    """Check Gmail for all users and extract transactions"""
+    try:
+        print("Starting Gmail check for all users...")
+        
+        # Get all users from Firebase
+        response = requests.get(f"{firebase.base_url}/users.json")
+        if not response.ok:
+            print("Failed to get users from Firebase")
+            return
+        
+        users = response.json()
+        if not users:
+            print("No users found")
+            return
+        
+        transaction_count = 0
+        
+        for user_key, user_data in users.items():
+            if not user_data or 'gmailTokens' not in user_data:
+                continue
+            
+            gmail_tokens = user_data['gmailTokens']
+            if not gmail_tokens.get('connected') or not gmail_tokens.get('access_token'):
+                continue
+            
+            user_email = user_data.get('email', '')
+            print(f"Checking Gmail for user: {user_email}")
+            
+            # Get last check time for this user
+            last_check = gmail_tokens.get('last_email_check')
+            
+            try:
+                # Get transactions from Gmail
+                transactions = get_gmail_transactions_for_user(gmail_tokens, user_email, last_check)
+                
+                if transactions:
+                    print(f"Found {len(transactions)} new transactions for {user_email}")
+                    
+                    # Store transactions in Firebase under user's transactions
+                    for transaction in transactions:
+                        success = store_user_transaction(user_key, transaction)
+                        if success:
+                            transaction_count += 1
+                
+                # Update last check time
+                gmail_tokens['last_email_check'] = datetime.now().isoformat()
+                user_data['gmailTokens'] = gmail_tokens
+                
+                # Save updated user data
+                requests.put(f"{firebase.base_url}/users/{user_key}.json", json=user_data)
+                
+            except Exception as e:
+                print(f"Error checking Gmail for user {user_email}: {str(e)}")
+                continue
+        
+        print(f"Gmail check completed. Found {transaction_count} new transactions total.")
+        
+    except Exception as e:
+        print(f"Error in check_all_users_gmail: {str(e)}")
+
+def get_gmail_transactions_for_user(gmail_tokens, user_email, last_check):
+    """Get transactions from Gmail for a specific user"""
+    try:
+        access_token = gmail_tokens['access_token']
+        
+        # Build search query
+        search_query = 'transaction OR payment OR purchase OR charge OR debit OR receipt OR invoice OR bank OR card'
+        
+        # Only get emails since last check (last 6 hours if no last check)
+        if last_check:
+            try:
+                last_check_date = datetime.fromisoformat(last_check.replace('Z', '+00:00'))
+                hours_ago = max(1, int((datetime.now() - last_check_date).total_seconds() / 3600))
+                search_query += f' newer_than:{hours_ago}h'
+            except:
+                search_query += ' newer_than:6h'  # Default to 6 hours
+        else:
+            search_query += ' newer_than:6h'  # Default to 6 hours
+        
+        # Get emails from Gmail API
+        emails = search_gmail_emails(access_token, search_query, max_results=20)
+        
+        transactions = []
+        for email_data in emails:
+            # Get full email content
+            email = get_gmail_email(access_token, email_data['id'])
+            
+            if email:
+                # Extract transaction data
+                transaction = extract_transaction_from_email(email)
+                if transaction:
+                    # Add user information
+                    transaction['user_email'] = user_email
+                    transaction['source'] = 'gmail_auto'
+                    transactions.append(transaction)
+        
+        return transactions
+        
+    except Exception as e:
+        print(f"Error getting Gmail transactions for {user_email}: {str(e)}")
+        return []
+
+def store_user_transaction(user_key, transaction):
+    """Store transaction in user's Firebase transactions"""
+    try:
+        # Get user's existing transactions
+        response = requests.get(f"{firebase.base_url}/users/{user_key}/transactions.json")
+        
+        if response.ok:
+            existing_transactions = response.json() or []
+        else:
+            existing_transactions = []
+        
+        # Add new transaction to beginning of list
+        existing_transactions.insert(0, transaction)
+        
+        # Keep only last 50 transactions
+        if len(existing_transactions) > 50:
+            existing_transactions = existing_transactions[:50]
+        
+        # Save back to Firebase
+        response = requests.put(f"{firebase.base_url}/users/{user_key}/transactions.json", json=existing_transactions)
+        
+        return response.ok
+        
+    except Exception as e:
+        print(f"Error storing transaction for user {user_key}: {str(e)}")
+        return False
+
+def run_background_scheduler():
+    """Run the background scheduler in a separate thread"""
+    while True:
+        schedule.run_pending()
+        time.sleep(30)  # Check every 30 seconds
+
+# Schedule Gmail checking every 5 minutes
+schedule.every(5).minutes.do(check_all_users_gmail)
+
+# Start background scheduler
+def start_background_services():
+    """Start background services"""
+    print("Starting background services...")
+    
+    # Run initial check after 30 seconds
+    threading.Timer(30.0, check_all_users_gmail).start()
+    
+    # Start scheduler thread
+    scheduler_thread = threading.Thread(target=run_background_scheduler, daemon=True)
+    scheduler_thread.start()
+    
+    print("Background services started")
+
 if __name__ == '__main__':
+    # Start background services
+    start_background_services()
+    
     app.run(debug=True, host='0.0.0.0', port=5000)

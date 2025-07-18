@@ -788,6 +788,13 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
             broader_query = f'newer_than:{minutes}m'
             email_list = search_gmail_emails(access_token, broader_query, max_results=20)
             print(f"Found {len(email_list)} emails with broader search")
+            
+        # If still no emails, try without time filter for testing
+        if not email_list:
+            print("No emails found with time filter, trying without time filter for testing...")
+            test_query = ' OR '.join(search_query_parts[:5])  # Just first 5 terms
+            email_list = search_gmail_emails(access_token, test_query, max_results=10)
+            print(f"Found {len(email_list)} emails without time filter")
         
         # IST timezone
         ist_tz = pytz.timezone('Asia/Kolkata')
@@ -956,6 +963,39 @@ def extract_email_body(payload):
         print(f"Error extracting email body: {str(e)}")
         return ''
 
+def find_user_by_gmail_account(gmail_account):
+    """Find the actual user who owns this Gmail account by searching through Firebase users"""
+    try:
+        # Get all users from Firebase
+        response = requests.get(f"{firebase.base_url}/users.json")
+        if not response.ok:
+            return None
+        
+        users = response.json()
+        if not users:
+            return None
+        
+        # Search through all users to find who has this Gmail account connected
+        for user_key, user_data in users.items():
+            if not user_data or 'gmailTokens' not in user_data:
+                continue
+            
+            gmail_tokens = user_data['gmailTokens']
+            if not gmail_tokens.get('connected'):
+                continue
+            
+            # Check if this user has the Gmail account connected
+            connected_email = gmail_tokens.get('email', '')
+            if connected_email == gmail_account:
+                # Return the actual user's email
+                return user_data.get('email', user_key.replace('_', '.'))
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error finding user by Gmail account: {str(e)}")
+        return None
+
 @app.route('/gmail/check-now')
 def check_gmail_now():
     """Manually check Gmail for transactions with dynamic time parameter - returns all emails and transactions"""
@@ -982,9 +1022,14 @@ def check_gmail_now():
         if not tokens.get('connected') or not tokens.get('access_token'):
             return jsonify({'error': 'Gmail not connected or no access token'}), 400
         
-        # Determine which user's file to store transactions in
-        # If actualUserEmail is provided, use that; otherwise use the connected Gmail account
-        storage_user_email = actual_user_email if actual_user_email else user_email
+        # Find the actual user who owns this Gmail account
+        if not actual_user_email:
+            actual_user_email = find_user_by_gmail_account(user_email)
+            if not actual_user_email:
+                # Default to the Gmail account if we can't find the actual user
+                actual_user_email = user_email
+        
+        storage_user_email = actual_user_email
         
         print(f"Manual Gmail check requested for Gmail: {user_email}, storing in: {storage_user_email} (last {minutes} minutes)")
         
@@ -996,6 +1041,7 @@ def check_gmail_now():
         for transaction in result['transactions']:
             # Update transaction to reflect the actual user
             transaction['dashboard_user_email'] = storage_user_email
+            transaction['gmail_source'] = user_email
             success = store_user_transaction_in_file(storage_user_email, transaction)
             if success:
                 stored_count += 1
@@ -1016,10 +1062,15 @@ def check_gmail_now():
             'emails_found': result['total_emails'],
             'transactions_found': result['total_transactions'],
             'transactions_stored': stored_count,
-            'emails': result['emails'],
+            'gmail_messages': result['emails'],  # Show actual Gmail messages
             'transactions': result['transactions'],
             'message': f'Checked last {minutes} minutes of Gmail ({user_email}). Found {result["total_emails"]} emails with {result["total_transactions"]} transactions. Stored in {storage_user_email} file.',
-            'error': result.get('error')
+            'error': result.get('error'),
+            'user_mapping': {
+                'gmail_account': user_email,
+                'actual_user': storage_user_email,
+                'mapping_method': 'auto-detected' if not request.args.get('actualUserEmail') else 'manual'
+            }
         })
         
     except Exception as e:

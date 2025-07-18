@@ -51,6 +51,19 @@ def health():
         'firebase_connection': 'active'
     })
 
+@app.route('/debug/env')
+def debug_env():
+    """Debug endpoint to check environment variables"""
+    return jsonify({
+        'gmail_client_id': 'Set' if GMAIL_CONFIG['client_id'] else 'Missing',
+        'gmail_client_secret': 'Set' if GMAIL_CONFIG['client_secret'] else 'Missing',
+        'redirect_uri': GMAIL_CONFIG['redirect_uri'],
+        'environment_variables': {
+            'GMAIL_CLIENT_ID': 'Set' if os.environ.get('GMAIL_CLIENT_ID') else 'Missing',
+            'GMAIL_CLIENT_SECRET': 'Set' if os.environ.get('GMAIL_CLIENT_SECRET') else 'Missing'
+        }
+    })
+
 # Task endpoints
 @app.route('/tasks', methods=['GET'])
 def get_tasks():
@@ -255,6 +268,38 @@ def get_transactions():
 def gmail_oauth_callback():
     """Handle OAuth callback from Google"""
     try:
+        # Check if environment variables are set
+        if not GMAIL_CONFIG['client_id'] or not GMAIL_CONFIG['client_secret']:
+            return '''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Gmail Authentication</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                    .container { max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                    .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
+                    h1 { color: #333; margin-bottom: 10px; }
+                    p { color: #666; margin-bottom: 10px; }
+                    .debug { background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 12px; text-align: left; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error">⚠️</div>
+                    <h1>Configuration Error</h1>
+                    <p>Gmail OAuth credentials not configured properly.</p>
+                    <div class="debug">
+                        <strong>Missing Environment Variables:</strong><br>
+                        GMAIL_CLIENT_ID: ''' + ('Set' if GMAIL_CONFIG['client_id'] else 'Missing') + '''<br>
+                        GMAIL_CLIENT_SECRET: ''' + ('Set' if GMAIL_CONFIG['client_secret'] else 'Missing') + '''<br><br>
+                        <strong>Please set these environment variables on your deployment platform.</strong>
+                    </div>
+                </div>
+            </body>
+            </html>
+            '''
+        
         # Get authorization code and state from URL parameters
         code = request.args.get('code')
         error = request.args.get('error')

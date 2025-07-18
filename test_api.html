@@ -192,7 +192,7 @@
                 
                 <div class="form-group" style="margin-top: 15px;">
                     <label>Server URL:</label>
-                    <input type="text" id="server-url" value="http://localhost:5000" placeholder="http://localhost:5000">
+                    <input type="text" id="server-url" value="https://dashboard-flask-api.onrender.com" placeholder="https://dashboard-flask-api.onrender.com">
                 </div>
             </div>
             
@@ -206,6 +206,48 @@
                 
                 <div class="url-display">
                     Firebase URL: https://dashboard-app-fcd42-default-rtdb.firebaseio.com/.json
+                </div>
+            </div>
+            
+            <!-- Gmail Testing -->
+            <div class="test-card">
+                <h2>📧 Gmail Testing</h2>
+                
+                <div class="form-group">
+                    <label>User Email:</label>
+                    <input type="email" id="gmail-user-email" placeholder="user@gmail.com" value="test@example.com">
+                </div>
+                
+                <div class="form-group">
+                    <label>Time Period (minutes):</label>
+                    <input type="number" id="gmail-minutes" placeholder="5" value="5" min="1" max="1440">
+                </div>
+                
+                <button class="btn" onclick="testGmailCheckNow()">Check Gmail Now</button>
+                <button class="btn" onclick="testGmailConnections()">Get User Connections</button>
+                <button class="btn" onclick="testGmailRefresh()">Refresh Gmail Token</button>
+                
+                <div class="url-display" id="gmail-url-display">
+                    Gmail Check URL: Will be generated when testing
+                </div>
+            </div>
+            
+            <!-- Debug Testing -->
+            <div class="test-card">
+                <h2>🔍 Debug Testing</h2>
+                
+                <button class="btn" onclick="testDebugEnv()">Environment Variables</button>
+                <button class="btn" onclick="testDebugScheduler()">Scheduler Status</button>
+                <button class="btn" onclick="testOAuthCallback()">OAuth Callback Test</button>
+                
+                <div class="form-group">
+                    <label>OAuth Test State:</label>
+                    <input type="text" id="oauth-state" placeholder="test@example.com" value="test@example.com">
+                </div>
+                
+                <div class="form-group">
+                    <label>OAuth Test Code:</label>
+                    <input type="text" id="oauth-code" placeholder="4/test-code" value="4/test-code">
                 </div>
             </div>
             
@@ -334,6 +376,73 @@
         
         function loadSampleDebit() {
             document.getElementById('sms-message').value = 'UPDATE: INR 5,000.00 debited from HDFC Bank XX7312 on 10-JUL-25. Info: ACH D- RACPC KUKATPALLY HYD-NODNHTSYM250. Avl bal:INR 96,103.57';
+        }
+        
+        // Gmail Tests
+        async function testGmailCheckNow() {
+            const userEmail = document.getElementById('gmail-user-email').value;
+            const minutes = document.getElementById('gmail-minutes').value;
+            
+            if (!userEmail) {
+                updateResponse('User email is required', true);
+                return;
+            }
+            
+            if (!minutes || minutes < 1 || minutes > 1440) {
+                updateResponse('Minutes must be between 1 and 1440', true);
+                return;
+            }
+            
+            const url = `${getServerUrl()}/gmail/check-now?userEmail=${encodeURIComponent(userEmail)}&minutes=${minutes}`;
+            document.getElementById('gmail-url-display').textContent = `Gmail Check URL: ${url}`;
+            
+            await makeRequest(url);
+        }
+        
+        async function testGmailConnections() {
+            const userEmail = document.getElementById('gmail-user-email').value;
+            
+            if (!userEmail) {
+                updateResponse('User email is required', true);
+                return;
+            }
+            
+            const url = `${getServerUrl()}/gmail/connections?userEmail=${encodeURIComponent(userEmail)}`;
+            await makeRequest(url);
+        }
+        
+        async function testGmailRefresh() {
+            const userEmail = document.getElementById('gmail-user-email').value;
+            
+            if (!userEmail) {
+                updateResponse('User email is required', true);
+                return;
+            }
+            
+            const url = `${getServerUrl()}/gmail/refresh?userEmail=${encodeURIComponent(userEmail)}`;
+            await makeRequest(url);
+        }
+        
+        // Debug Tests
+        async function testDebugEnv() {
+            await makeRequest(`${getServerUrl()}/debug/env`);
+        }
+        
+        async function testDebugScheduler() {
+            await makeRequest(`${getServerUrl()}/debug/scheduler`);
+        }
+        
+        async function testOAuthCallback() {
+            const state = document.getElementById('oauth-state').value;
+            const code = document.getElementById('oauth-code').value;
+            
+            if (!state || !code) {
+                updateResponse('OAuth state and code are required', true);
+                return;
+            }
+            
+            const url = `${getServerUrl()}/oauth/gmail/callback?state=${encodeURIComponent(state)}&code=${encodeURIComponent(code)}`;
+            await makeRequest(url);
         }
         
         // Set today's date by default

@@ -669,15 +669,18 @@ def refresh_gmail_token():
         print(f"Token refresh error: {str(e)}")
         return jsonify({'error': 'Failed to refresh token'}), 500
 
-@app.route('/gmail/check-now', methods=['POST'])
+@app.route('/gmail/check-now')
 def check_gmail_now():
-    """Manually check Gmail for transactions (last 5 minutes)"""
+    """Manually check Gmail for transactions with dynamic time parameter"""
     try:
-        data = request.get_json()
-        user_email = data.get('userEmail')
+        user_email = request.args.get('userEmail')
+        minutes = int(request.args.get('minutes', 5))  # Default to 5 minutes
         
         if not user_email:
-            return jsonify({'error': 'User email required'}), 400
+            return jsonify({'error': 'User email required. Use ?userEmail=your@email.com'}), 400
+        
+        if minutes < 1 or minutes > 1440:  # Max 24 hours
+            return jsonify({'error': 'Minutes must be between 1 and 1440 (24 hours)'}), 400
         
         # Get user's Gmail tokens from Firebase
         user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
@@ -691,10 +694,10 @@ def check_gmail_now():
         if not tokens.get('connected') or not tokens.get('access_token'):
             return jsonify({'error': 'Gmail not connected or no access token'}), 400
         
-        print(f"Manual Gmail check requested for user: {user_email}")
+        print(f"Manual Gmail check requested for user: {user_email} (last {minutes} minutes)")
         
-        # Get transactions from last 5 minutes
-        transactions = get_gmail_transactions_for_user(tokens, user_email, None, minutes=5)
+        # Get transactions from specified time period
+        transactions = get_gmail_transactions_for_user(tokens, user_email, None, minutes=minutes)
         
         if transactions:
             print(f"Found {len(transactions)} new transactions for {user_email}")
@@ -713,16 +716,21 @@ def check_gmail_now():
             
             return jsonify({
                 'success': True,
+                'user_email': user_email,
+                'time_period_minutes': minutes,
                 'transactions_found': len(transactions),
                 'transactions_stored': stored_count,
-                'transactions': transactions
+                'transactions': transactions,
+                'message': f'Checked last {minutes} minutes of Gmail for {user_email}'
             })
         else:
             return jsonify({
                 'success': True,
+                'user_email': user_email,
+                'time_period_minutes': minutes,
                 'transactions_found': 0,
                 'transactions_stored': 0,
-                'message': 'No new transactions found in the last 5 minutes'
+                'message': f'No new transactions found in the last {minutes} minutes'
             })
         
     except Exception as e:

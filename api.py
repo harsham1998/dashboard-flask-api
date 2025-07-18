@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 from datetime import datetime
+import pytz
 import time
 import requests
 import base64
@@ -669,9 +670,160 @@ def refresh_gmail_token():
         print(f"Token refresh error: {str(e)}")
         return jsonify({'error': 'Failed to refresh token'}), 500
 
+def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
+    """Get all emails with details and identified transactions for a specific user"""
+    try:
+        access_token = gmail_tokens['access_token']
+        
+        # Build search query for broader email search
+        search_query = 'transaction OR payment OR purchase OR charge OR debit OR receipt OR invoice OR bank OR card OR upi OR transfer OR credited OR debited'
+        
+        # Add time filter
+        if minutes > 60:
+            hours_ago = max(1, int(minutes / 60))
+            search_query += f' newer_than:{hours_ago}h'
+        else:
+            search_query += f' newer_than:{minutes}m'
+        
+        print(f"Gmail search query: {search_query}")
+        
+        # Get emails from Gmail API
+        email_list = search_gmail_emails(access_token, search_query, max_results=50)
+        
+        # IST timezone
+        ist_tz = pytz.timezone('Asia/Kolkata')
+        
+        all_emails = []
+        transactions = []
+        
+        for email_data in email_list:
+            # Get full email content
+            email = get_gmail_email(access_token, email_data['id'])
+            
+            if email:
+                # Extract email details
+                email_info = {
+                    'id': email['id'],
+                    'thread_id': email['threadId'],
+                    'snippet': email.get('snippet', ''),
+                    'payload': email.get('payload', {}),
+                    'size_estimate': email.get('sizeEstimate', 0),
+                    'history_id': email.get('historyId', ''),
+                    'internal_date': email.get('internalDate', ''),
+                    'label_ids': email.get('labelIds', [])
+                }
+                
+                # Convert Gmail internal date to IST
+                if email_info['internal_date']:
+                    try:
+                        # Gmail internal date is Unix timestamp in milliseconds
+                        timestamp_ms = int(email_info['internal_date'])
+                        timestamp_s = timestamp_ms / 1000
+                        utc_dt = datetime.fromtimestamp(timestamp_s, tz=pytz.UTC)
+                        ist_dt = utc_dt.astimezone(ist_tz)
+                        email_info['ist_date'] = ist_dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+                        email_info['ist_timestamp'] = ist_dt.isoformat()
+                    except:
+                        email_info['ist_date'] = 'Unable to parse'
+                        email_info['ist_timestamp'] = None
+                
+                # Extract subject, sender, and body
+                headers = email_info['payload'].get('headers', [])
+                for header in headers:
+                    name = header.get('name', '').lower()
+                    value = header.get('value', '')
+                    
+                    if name == 'subject':
+                        email_info['subject'] = value
+                    elif name == 'from':
+                        email_info['from'] = value
+                    elif name == 'to':
+                        email_info['to'] = value
+                    elif name == 'date':
+                        email_info['date_header'] = value
+                
+                # Extract email body
+                body = extract_email_body(email_info['payload'])
+                email_info['body'] = body[:500] + '...' if len(body) > 500 else body  # Truncate for response size
+                email_info['full_body'] = body  # Keep full body for transaction extraction
+                
+                # Try to extract transaction data
+                transaction = extract_transaction_from_email(email)
+                if transaction:
+                    # Add user information and email details
+                    transaction['user_email'] = user_email
+                    transaction['source'] = 'gmail_manual'
+                    transaction['email_id'] = email_info['id']
+                    transaction['email_subject'] = email_info.get('subject', '')
+                    transaction['email_from'] = email_info.get('from', '')
+                    transaction['email_ist_date'] = email_info.get('ist_date', '')
+                    transactions.append(transaction)
+                    email_info['has_transaction'] = True
+                    email_info['transaction_data'] = transaction
+                else:
+                    email_info['has_transaction'] = False
+                    email_info['transaction_data'] = None
+                
+                # Remove full_body from email_info to reduce response size
+                del email_info['full_body']
+                
+                all_emails.append(email_info)
+        
+        return {
+            'emails': all_emails,
+            'transactions': transactions,
+            'total_emails': len(all_emails),
+            'total_transactions': len(transactions)
+        }
+        
+    except Exception as e:
+        print(f"Error getting Gmail emails with details for {user_email}: {str(e)}")
+        return {
+            'emails': [],
+            'transactions': [],
+            'total_emails': 0,
+            'total_transactions': 0,
+            'error': str(e)
+        }
+
+def extract_email_body(payload):
+    """Extract email body from Gmail payload"""
+    try:
+        body = ''
+        
+        if 'parts' in payload:
+            for part in payload['parts']:
+                if part['mimeType'] == 'text/plain':
+                    if 'data' in part['body']:
+                        body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                elif part['mimeType'] == 'text/html':
+                    if 'data' in part['body']:
+                        html_body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                        # Simple HTML to text conversion (remove tags)
+                        import re
+                        text_body = re.sub(r'<[^>]+>', '', html_body)
+                        body += text_body
+        else:
+            # Single part message
+            if payload['mimeType'] == 'text/plain':
+                if 'data' in payload['body']:
+                    body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+            elif payload['mimeType'] == 'text/html':
+                if 'data' in payload['body']:
+                    html_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+                    # Simple HTML to text conversion
+                    import re
+                    body = re.sub(r'<[^>]+>', '', html_body)
+        
+        return body.strip()
+        
+    except Exception as e:
+        print(f"Error extracting email body: {str(e)}")
+        return ''
+
 @app.route('/gmail/check-now')
 def check_gmail_now():
-    """Manually check Gmail for transactions with dynamic time parameter"""
+    """Manually check Gmail for transactions with dynamic time parameter - returns all emails and transactions"""
     try:
         user_email = request.args.get('userEmail')
         minutes = int(request.args.get('minutes', 5))  # Default to 5 minutes
@@ -696,42 +848,36 @@ def check_gmail_now():
         
         print(f"Manual Gmail check requested for user: {user_email} (last {minutes} minutes)")
         
-        # Get transactions from specified time period
-        transactions = get_gmail_transactions_for_user(tokens, user_email, None, minutes=minutes)
+        # Get all emails with details and transactions
+        result = get_gmail_emails_with_details(tokens, user_email, minutes=minutes)
         
-        if transactions:
-            print(f"Found {len(transactions)} new transactions for {user_email}")
-            
-            # Store transactions in user's individual JSON file
-            stored_count = 0
-            for transaction in transactions:
-                success = store_user_transaction_in_file(user_email, transaction)
-                if success:
-                    stored_count += 1
-            
-            # Update last check time
-            tokens['last_email_check'] = datetime.now().isoformat()
-            user_data['gmailTokens'] = tokens
-            firebase.update_user_data(user_email_key, user_data)
-            
-            return jsonify({
-                'success': True,
-                'user_email': user_email,
-                'time_period_minutes': minutes,
-                'transactions_found': len(transactions),
-                'transactions_stored': stored_count,
-                'transactions': transactions,
-                'message': f'Checked last {minutes} minutes of Gmail for {user_email}'
-            })
-        else:
-            return jsonify({
-                'success': True,
-                'user_email': user_email,
-                'time_period_minutes': minutes,
-                'transactions_found': 0,
-                'transactions_stored': 0,
-                'message': f'No new transactions found in the last {minutes} minutes'
-            })
+        # Store transactions in user's individual JSON file
+        stored_count = 0
+        for transaction in result['transactions']:
+            success = store_user_transaction_in_file(user_email, transaction)
+            if success:
+                stored_count += 1
+        
+        # Update last check time
+        ist_tz = pytz.timezone('Asia/Kolkata')
+        current_time_ist = datetime.now(ist_tz)
+        tokens['last_email_check'] = current_time_ist.isoformat()
+        user_data['gmailTokens'] = tokens
+        firebase.update_user_data(user_email_key, user_data)
+        
+        return jsonify({
+            'success': True,
+            'user_email': user_email,
+            'time_period_minutes': minutes,
+            'current_time_ist': current_time_ist.strftime('%Y-%m-%d %H:%M:%S %Z'),
+            'emails_found': result['total_emails'],
+            'transactions_found': result['total_transactions'],
+            'transactions_stored': stored_count,
+            'emails': result['emails'],
+            'transactions': result['transactions'],
+            'message': f'Checked last {minutes} minutes of Gmail for {user_email}. Found {result["total_emails"]} emails with {result["total_transactions"]} transactions.',
+            'error': result.get('error')
+        })
         
     except Exception as e:
         print(f"Manual Gmail check error: {str(e)}")
@@ -952,7 +1098,7 @@ def parse_transaction_data(subject, body, sender, date):
             pass
     
     return {
-        'id': f"gmail_{int(datetime.now().timestamp())}_{email['id'][:8]}",
+        'id': f"gmail_{int(datetime.now().timestamp())}_{hash(subject + body)%10000:04d}",
         'amount': amount,
         'currency': 'USD',
         'date': transaction_date,

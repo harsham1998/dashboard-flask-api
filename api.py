@@ -499,29 +499,6 @@ def gmail_oauth_callback():
                     </body>
                     </html>
                     '''
-                else:
-                    return '''
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <title>Gmail Authentication</title>
-                        <style>
-                            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-                            .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                            .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
-                            h1 { color: #333; margin-bottom: 10px; }
-                            p { color: #666; }
-                        </style>
-                    </head>
-                    <body>
-                        <div class="container">
-                            <div class="error">❌</div>
-                            <h1>User Not Found</h1>
-                            <p>User data not found. Please make sure you're logged in to the dashboard.</p>
-                        </div>
-                    </body>
-                    </html>
-                    '''
             except Exception as e:
                 print(f'Error storing Gmail tokens: {str(e)}')
                 return f'''

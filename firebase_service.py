@@ -96,6 +96,26 @@ class FirebaseService:
             print(f"Firebase get_transactions error: {e}")
             return []
     
+    def get_user_data(self, user_email_key: str) -> Optional[Dict]:
+        """Get user data from Firebase users collection"""
+        try:
+            response = requests.get(f"{self.base_url}/users/{user_email_key}.json")
+            if response.status_code == 200:
+                return response.json()
+            return None
+        except Exception as e:
+            print(f"Firebase get_user_data error: {e}")
+            return None
+    
+    def update_user_data(self, user_email_key: str, user_data: Dict) -> bool:
+        """Update user data in Firebase users collection"""
+        try:
+            response = requests.put(f"{self.base_url}/users/{user_email_key}.json", json=user_data)
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Firebase update_user_data error: {e}")
+            return False
+    
     def _get_default_data(self) -> Dict:
         """Return default data structure"""
         return {

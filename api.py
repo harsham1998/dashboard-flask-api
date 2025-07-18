@@ -436,28 +436,42 @@ def gmail_oauth_callback():
             try:
                 user_email_key = state.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
                 
-                # Get existing user data using Firebase service
+                # Get existing user data or create new user
                 user_data = firebase.get_user_data(user_email_key)
                 
-                if user_data:
-                    # Add Gmail tokens to user data
-                    user_data['gmailTokens'] = {
-                        'access_token': tokens['access_token'],
-                        'refresh_token': tokens['refresh_token'],
-                        'expires_in': tokens['expires_in'],
-                        'token_type': tokens['token_type'],
-                        'scope': tokens['scope'],
-                        'created_at': datetime.now().isoformat(),
-                        'connected': True
+                if not user_data:
+                    # Create new user data
+                    user_data = {
+                        'email': state,
+                        'name': state.split('@')[0].title(),
+                        'createdAt': datetime.now().isoformat(),
+                        'lastLogin': datetime.now().isoformat()
                     }
-                    
-                    # Save back to Firebase using Firebase service
-                    firebase.update_user_data(user_email_key, user_data)
-                    
+                else:
+                    # Update last login
+                    user_data['lastLogin'] = datetime.now().isoformat()
+                
+                # Add Gmail tokens to user data
+                user_data['gmailTokens'] = {
+                    'access_token': tokens['access_token'],
+                    'refresh_token': tokens['refresh_token'],
+                    'expires_in': tokens['expires_in'],
+                    'token_type': tokens['token_type'],
+                    'scope': tokens['scope'],
+                    'created_at': datetime.now().isoformat(),
+                    'connected': True
+                }
+                
+                # Save back to Firebase using Firebase service
+                success = firebase.update_user_data(user_email_key, user_data)
+                
+                if success:
                     print(f'Gmail tokens stored for user: {state}')
-                    
-                    # Return success page
-                    return '''
+                else:
+                    print(f'Failed to store Gmail tokens for user: {state}')
+                
+                # Return success page
+                return '''
                     <!DOCTYPE html>
                     <html>
                     <head>

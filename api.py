@@ -70,15 +70,21 @@ def store_user_transaction_in_file(user_email, transaction):
         transactions_path = f"{firebase.base_url}/{user_id}/transactions.json"
         # Get current transactions
         response = requests.get(transactions_path)
+        transactions = []
         if response.ok:
-            data = response.json()
+            try:
+                data = response.json()
+            except Exception as e:
+                print(f"Error decoding Firebase response: {str(e)}")
+                data = None
             # If the file is empty or not a list, start with an empty list
-            if not data or not isinstance(data, list):
+            if data is None:
                 transactions = []
-            else:
+            elif isinstance(data, list):
                 transactions = data
-        else:
-            transactions = []
+            else:
+                transactions = []
+        # If response not ok, transactions remains empty
 
         # Check for duplicate transactions
         transaction_id = transaction.get('id')

@@ -1816,14 +1816,29 @@ def check_gmail_now():
         result = get_gmail_emails_with_details(tokens, user_email, minutes=minutes)
         
         # Store transactions in the correct user's individual JSON file
+        storage_results = []
         stored_count = 0
         for transaction in result['transactions']:
-            # Update transaction to reflect the actual user
             transaction['dashboard_user_email'] = storage_user_email
             transaction['gmail_source'] = user_email
-            success = store_user_transaction_in_file(storage_user_email, transaction)
-            if success:
+            store_result = store_user_transaction_in_file(storage_user_email, transaction)
+            transaction_id = transaction.get('id')
+            user_id = find_user_id_by_email(storage_user_email)
+            firebase_path = f"{firebase.base_url}/{user_id}/transactions.json" if user_id else None
+            if store_result.get('stored'):
                 stored_count += 1
+                storage_results.append({
+                    "transaction_id": transaction_id,
+                    "stored": True,
+                    "firebase_path": firebase_path
+                })
+            else:
+                storage_results.append({
+                    "transaction_id": transaction_id,
+                    "stored": False,
+                    "error": store_result.get('error'),
+                    "firebase_path": firebase_path
+                })
         
         # Update last check time
         ist_tz = pytz.timezone('Asia/Kolkata')
@@ -1861,7 +1876,8 @@ def check_gmail_now():
             'emails_found': result['total_emails'],
             'transactions_found': result['total_transactions'],
             'transactions_stored': stored_count,
-            'gmail_messages': result['emails'],  # Show actual Gmail messages
+            'storage_results': storage_results,
+            'gmail_messages': result['emails'],
             'transactions': transactions_cleaned,
             'message': f'Checked last {minutes} minutes of Gmail ({user_email}). Found {result["total_emails"]} emails with {result["total_transactions"]} transactions. Stored in {storage_user_email} file.',
             'error': result.get('error'),

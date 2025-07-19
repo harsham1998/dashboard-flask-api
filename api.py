@@ -6,6 +6,8 @@ import time
 import requests
 import base64
 import re
+import html
+from bs4 import BeautifulSoup
 from email.utils import parsedate_to_datetime
 from firebase_service import FirebaseService
 from text_processor import TextProcessor
@@ -1007,38 +1009,32 @@ def decode_gmail_base64(encoded_data):
 def extract_email_body(payload):
     """Extract email body from Gmail payload with proper Base64url decoding"""
     try:
-        body = ''
-        
-        if 'parts' in payload:
-            for part in payload['parts']:
-                if part['mimeType'] == 'text/plain':
-                    if 'data' in part.get('body', {}):
-                        decoded_body = decode_gmail_base64(part['body']['data'])
-                        body += decoded_body
-                elif part['mimeType'] == 'text/html':
-                    if 'data' in part.get('body', {}):
-                        decoded_html = decode_gmail_base64(part['body']['data'])
-                        # Simple HTML to text conversion (remove tags)
-                        import re
-                        text_body = re.sub(r'<[^>]+>', '', decoded_html)
-                        body += text_body
-                elif 'parts' in part:
-                    # Nested parts (multipart/alternative, etc.)
-                    body += extract_email_body(part)
-        else:
-            # Single part message
-            if payload['mimeType'] == 'text/plain':
-                if 'data' in payload.get('body', {}):
-                    body = decode_gmail_base64(payload['body']['data'])
-            elif payload['mimeType'] == 'text/html':
-                if 'data' in payload.get('body', {}):
-                    decoded_html = decode_gmail_base64(payload['body']['data'])
-                    # Simple HTML to text conversion
-                    import re
-                    body = re.sub(r'<[^>]+>', '', decoded_html)
-        
-        return body.strip()
-        
+        raw_body = ''
+        if isinstance(payload, dict):
+            if 'parts' in payload:
+                for part in payload['parts']:
+                    if part.get('mimeType') == 'text/plain':
+                        if 'data' in part.get('body', {}):
+                            decoded_body = decode_gmail_base64(part['body']['data'])
+                            raw_body += decoded_body
+                    elif part.get('mimeType') == 'text/html':
+                        if 'data' in part.get('body', {}):
+                            decoded_html = decode_gmail_base64(part['body']['data'])
+                            raw_body += decoded_html
+                    elif 'parts' in part:
+                        raw_body += extract_email_body(part)
+            else:
+                if payload.get('mimeType') == 'text/plain':
+                    if 'data' in payload.get('body', {}):
+                        raw_body = decode_gmail_base64(payload['body']['data'])
+                elif payload.get('mimeType') == 'text/html':
+                    if 'data' in payload.get('body', {}):
+                        decoded_html = decode_gmail_base64(payload['body']['data'])
+                        raw_body = decoded_html
+
+        # Clean the raw body using your helper
+        cleaned_body = clean_email_body(raw_body)
+        return cleaned_body
     except Exception as e:
         print(f"Error extracting email body: {str(e)}")
         return ''
@@ -1359,17 +1355,127 @@ def extract_transaction_from_email(email):
         sender = next((h['value'] for h in headers if h['name'] == 'From'), '')
         date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
         body = extract_email_body(payload)
-        transaction, transaction_log = parse_transaction_data(subject, body, sender, date, return_log=True)
-        if transaction:
+        # Use your parsing function
+        transaction = parse_transaction_email(body)
+        transaction_log = None
+        if transaction and transaction.get('amount'):
             transaction['emailId'] = email['id']
             transaction['emailSubject'] = subject
             transaction['emailFrom'] = sender
             transaction['emailDate'] = date
-        return transaction, transaction_log
-        
+            transaction_log = 'Transaction detected.'
+            return transaction, transaction_log
+        else:
+            transaction_log = 'No transaction detected or amount missing.'
+            return None, transaction_log
     except Exception as e:
         print(f"Extract transaction error: {str(e)}")
-        return None
+        return None, None
+# Helper functions from user
+def clean_email_body(raw_body):
+    """
+    Cleans a raw Gmail email body string with \uXXXX, links, tags, etc.
+    """
+    try:
+        # Unescape unicode (\u003C etc.)
+        raw_body = bytes(raw_body, "utf-8").decode("unicode_escape")
+
+        # Unescape HTML entities
+        unescaped = html.unescape(raw_body)
+
+        # Remove tracking links like <https://...>
+        unescaped = re.sub(r'<https?://[^>]+>', '', unescaped)
+
+        # Strip remaining HTML
+        soup = BeautifulSoup(unescaped, 'html.parser')
+        for tag in soup(['script', 'style', 'head', 'meta', 'title']):
+            tag.decompose()
+        text = soup.get_text(separator=' ')
+
+        # Remove extra whitespace
+        text = re.sub(r'https?://\S+', '', text)  # Remove links
+        text = re.sub(r'\s+', ' ', text).strip()
+
+        return text
+
+    except Exception as e:
+        return f"Error cleaning email: {str(e)}"
+
+def parse_transaction_email(text):
+    """
+    Extracts structured transaction info from clean email body
+    """
+    try:
+        text_lower = text.lower()
+
+        result = {
+            "amount": None,
+            "merchant": None,
+            "bank": None,
+            "transaction_type": None,
+            "credit_or_debit": None,
+            "date": None,
+            "reference_number": None,
+            "card_info": None,
+            "currency": "INR",
+            "description": text[:300]
+        }
+
+        # Amount
+        amt_match = re.search(r'(rs\.?|inr|₹)\s*([0-9,]+\.\d{1,2})', text_lower)
+        if amt_match:
+            result['amount'] = float(amt_match.group(2).replace(',', ''))
+
+        # Credit or Debit
+        if 'debited' in text_lower:
+            result['credit_or_debit'] = 'debit'
+        elif 'credited' in text_lower or 'received' in text_lower:
+            result['credit_or_debit'] = 'credit'
+
+        # Transaction Type
+        if 'upi' in text_lower:
+            result['transaction_type'] = 'upi'
+        elif 'card' in text_lower:
+            result['transaction_type'] = 'card'
+        elif 'neft' in text_lower or 'imps' in text_lower:
+            result['transaction_type'] = 'bank_transfer'
+
+        # Merchant
+        merchant_match = re.search(r'to\s+([a-z0-9@.\s&-]+?)\s+(?:on|for)', text_lower)
+        if merchant_match:
+            result['merchant'] = merchant_match.group(1).strip()
+
+        # Bank
+        banks = ['hdfc', 'icici', 'sbi', 'axis', 'kotak', 'pnb', 'canara', 'union', 'bob', 'yes bank']
+        for bank in banks:
+            if bank in text_lower:
+                result['bank'] = bank.upper()
+                break
+
+        # Card Info
+        card_match = re.search(r'card\s+(?:xx|ending\s+in)?\s*(\d{4})', text_lower)
+        if card_match:
+            result['card_info'] = f"XX{card_match.group(1)}"
+
+        # Reference Number
+        ref_match = re.search(r'reference\s+(?:number|no\.?)\s+is\s+([\w\d]+)', text_lower)
+        if ref_match:
+            result['reference_number'] = ref_match.group(1)
+
+        # Date
+        date_match = re.search(r'on\s+(\d{2}[-/]\d{2}[-/]\d{2,4})', text_lower)
+        if date_match:
+            raw_date = date_match.group(1)
+            try:
+                fmt = '%d-%m-%y' if len(raw_date.split('-')[-1]) == 2 else '%d-%m-%Y'
+                result['date'] = datetime.strptime(raw_date, fmt).strftime('%Y-%m-%d')
+            except:
+                pass
+
+        return result
+
+    except Exception as e:
+        return {"error": f"Parsing error: {str(e)}"}
 
 
 def parse_transaction_data(subject, body, sender, date, return_log=False):
@@ -1411,99 +1517,7 @@ def parse_transaction_data(subject, body, sender, date, return_log=False):
         r'paid?\s*\$?([0-9,]+\.?\d{0,2})'
     ]
 
-    # Find amount and determine currency
-    amount = None
-    currency = 'INR'
-    for i, pattern in enumerate(amount_patterns):
-        match = re.search(pattern, text)
-        if match:
-            amount_str = match.group(1).replace(',', '')
-            try:
-                amount = float(amount_str)
-                if amount > 0:
-                    if i >= len(amount_patterns) - 4:
-                        currency = 'USD'
-                    else:
-                        currency = 'INR'
-                    break
-            except ValueError:
-                continue
-
-    # Transaction identification logic
-    is_transaction = False
-    # If amount is found, always consider as transaction
-    if amount:
-        is_transaction = True
-    # If sender is bank and subject/body has transaction keywords, consider as transaction
-    elif sender_has_bank and (subject_has_txn or body_has_txn):
-        is_transaction = True
-    # If subject and body both have transaction keywords, consider as transaction
-    elif subject_has_txn and body_has_txn:
-        is_transaction = True
-
-    if not is_transaction:
-        log_reason = None
-        if not body:
-            log_reason = 'Email body is empty.'
-        elif not (sender_has_bank or subject_has_txn or body_has_txn):
-            log_reason = 'No bank or transaction keywords found.'
-        elif not amount:
-            log_reason = 'No amount found.'
-        else:
-            log_reason = 'Does not match transaction patterns.'
-        if return_log:
-            return None, log_reason
-        else:
-            return None
-    
-    # Extract merchant with enhanced patterns for Indian transactions
-    merchant_patterns = [
-        # Indian transaction patterns
-        r'(?:at|from|to)\s+([a-zA-Z0-9\s&.-]+?)\s+(?:on|for|was|has)',
-        r'merchant:?\s*([a-zA-Z0-9\s&.-]+)',
-        r'purchase\s+(?:at|from)\s+([a-zA-Z0-9\s&.-]+)',
-        r'vpa\s+([a-zA-Z0-9@.-]+)',  # VPA for UPI
-        r'upi\s+(?:id|ref|txn).*?([a-zA-Z0-9@.-]+)',  # UPI ID
-        r'(?:to|from)\s+([a-zA-Z0-9\s&.-]+?)\s+(?:bank|account)',
-        r'(?:hdfc|icici|sbi|axis|kotak|paytm|phonepe|googlepay|amazon\s*pay)',  # Common Indian services
-        r'a/c\s+([a-zA-Z0-9\s&.-]+)',  # Account patterns
-        r'card\s+(?:ending|ending\s+in|xx)(\d{4})',  # Card ending patterns
-    ]
-    
-    merchant = 'Unknown'
-    for pattern in merchant_patterns:
-        match = re.search(pattern, text)
-        if match:
-            merchant = match.group(1).strip()
-            # Clean up merchant name
-            merchant = re.sub(r'[^a-zA-Z0-9\s@.-]', '', merchant)
-            if len(merchant) > 2:  # Only use if meaningful
-                break
-    
-    # Determine transaction type
-    is_credit = bool(re.search(r'received|refund|deposit|credit|cashback', text))
-    transaction_type = 'credit' if is_credit else 'debit'
-    
-    # Extract card info
-    card_match = re.search(r'\*{4}(\d{4})|ending\s+in\s+(\d{4})', text)
-    account = f"****{card_match.group(1) or card_match.group(2)}" if card_match else 'Unknown'
-    transaction = {
-        'amount': amount,
-        'currency': currency,
-        'date': date,
-        'merchant': merchant,
-        'type': transaction_type,
-        'account': account,
-        'category': 'Unknown',
-        'description': subject,
-        'source': sender,
-        'processed': False,
-        'verified': False
-    }
-    if return_log:
-        return transaction, None
-    else:
-        return transaction
+    # ...existing code...
 
 # Background email checking service
 def check_all_users_gmail():

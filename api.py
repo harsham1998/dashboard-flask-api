@@ -118,6 +118,564 @@ def health():
         'firebase_connection': 'active'
     })
 
+@app.route('/test-api.html')
+def test_api_html():
+    """Interactive API testing interface"""
+    html_content = '''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Dashboard API Tester</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                padding: 20px;
+            }
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 15px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                overflow: hidden;
+            }
+            .header {
+                background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+                color: white;
+                padding: 30px;
+                text-align: center;
+            }
+            .header h1 {
+                font-size: 2.5rem;
+                margin-bottom: 10px;
+            }
+            .header p {
+                opacity: 0.9;
+                font-size: 1.1rem;
+            }
+            .content {
+                padding: 30px;
+            }
+            .api-section {
+                margin-bottom: 40px;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+                overflow: hidden;
+            }
+            .api-header {
+                background: #f9fafb;
+                padding: 20px;
+                border-bottom: 1px solid #e5e7eb;
+                cursor: pointer;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .api-header:hover {
+                background: #f3f4f6;
+            }
+            .api-title {
+                font-size: 1.3rem;
+                font-weight: 600;
+                color: #1f2937;
+            }
+            .api-method {
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.8rem;
+                font-weight: 600;
+                text-transform: uppercase;
+            }
+            .method-get { background: #dcfce7; color: #16a34a; }
+            .method-post { background: #dbeafe; color: #2563eb; }
+            .method-put { background: #fef3c7; color: #d97706; }
+            .method-delete { background: #fee2e2; color: #dc2626; }
+            .api-body {
+                padding: 20px;
+                display: none;
+            }
+            .api-body.active {
+                display: block;
+            }
+            .form-group {
+                margin-bottom: 15px;
+            }
+            .form-group label {
+                display: block;
+                margin-bottom: 5px;
+                font-weight: 500;
+                color: #374151;
+            }
+            .form-group input, .form-group textarea, .form-group select {
+                width: 100%;
+                padding: 10px;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            .form-group textarea {
+                height: 100px;
+                resize: vertical;
+            }
+            .btn {
+                background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+                color: white;
+                padding: 12px 24px;
+                border: none;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+                transition: all 0.2s;
+            }
+            .btn:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }
+            .response-section {
+                margin-top: 20px;
+                border-top: 1px solid #e5e7eb;
+                padding-top: 20px;
+            }
+            .response-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 10px;
+            }
+            .status-badge {
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.8rem;
+                font-weight: 600;
+            }
+            .status-200 { background: #dcfce7; color: #16a34a; }
+            .status-400 { background: #fef3c7; color: #d97706; }
+            .status-500 { background: #fee2e2; color: #dc2626; }
+            .response-body {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                padding: 15px;
+                white-space: pre-wrap;
+                font-family: 'Courier New', monospace;
+                font-size: 13px;
+                max-height: 400px;
+                overflow-y: auto;
+            }
+            .loading {
+                display: none;
+                color: #6b7280;
+                font-style: italic;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🚀 Dashboard API Tester</h1>
+                <p>Test all API endpoints with interactive forms and live responses</p>
+            </div>
+            <div class="content">
+                
+                <!-- Health Check -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('health')">
+                        <div class="api-title">Health Check</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="health">
+                        <p><strong>Endpoint:</strong> /health</p>
+                        <p><strong>Description:</strong> Check if the API is running</p>
+                        <button class="btn" onclick="testAPI('health', 'GET', '/health')">Test Health</button>
+                        <div class="response-section" id="health-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="health-status"></span>
+                            </div>
+                            <div class="response-body" id="health-body"></div>
+                        </div>
+                        <div class="loading" id="health-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- User Connections -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('connections')">
+                        <div class="api-title">Get User Connections</div>
+                        <span class="api-method method-post">POST</span>
+                    </div>
+                    <div class="api-body" id="connections">
+                        <p><strong>Endpoint:</strong> /user/connections</p>
+                        <p><strong>Description:</strong> Get user's email connections</p>
+                        <div class="form-group">
+                            <label>User Email:</label>
+                            <input type="email" id="connections-email" placeholder="user@example.com" value="test@gmail.com">
+                        </div>
+                        <button class="btn" onclick="testUserConnections()">Test Connections</button>
+                        <div class="response-section" id="connections-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="connections-status"></span>
+                            </div>
+                            <div class="response-body" id="connections-body"></div>
+                        </div>
+                        <div class="loading" id="connections-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Gmail Check -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('gmail-check')">
+                        <div class="api-title">Check Gmail Now</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="gmail-check">
+                        <p><strong>Endpoint:</strong> /gmail/check-now</p>
+                        <p><strong>Description:</strong> Manually check Gmail for transactions</p>
+                        <div class="form-group">
+                            <label>User Email:</label>
+                            <input type="email" id="gmail-email" placeholder="user@example.com" value="test@gmail.com">
+                        </div>
+                        <div class="form-group">
+                            <label>Minutes to check (1-1440):</label>
+                            <input type="number" id="gmail-minutes" placeholder="5" value="5" min="1" max="1440">
+                        </div>
+                        <button class="btn" onclick="testGmailCheck()">Check Gmail</button>
+                        <div class="response-section" id="gmail-check-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="gmail-check-status"></span>
+                            </div>
+                            <div class="response-body" id="gmail-check-body"></div>
+                        </div>
+                        <div class="loading" id="gmail-check-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Refresh Gmail Token -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('refresh-token')">
+                        <div class="api-title">Refresh Gmail Token</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="refresh-token">
+                        <p><strong>Endpoint:</strong> /gmail/refresh</p>
+                        <p><strong>Description:</strong> Refresh Gmail access token</p>
+                        <div class="form-group">
+                            <label>User Email:</label>
+                            <input type="email" id="refresh-email" placeholder="user@example.com" value="test@gmail.com">
+                        </div>
+                        <button class="btn" onclick="testRefreshToken()">Refresh Token</button>
+                        <div class="response-section" id="refresh-token-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="refresh-token-status"></span>
+                            </div>
+                            <div class="response-body" id="refresh-token-body"></div>
+                        </div>
+                        <div class="loading" id="refresh-token-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Add Task -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('add-task')">
+                        <div class="api-title">Add Task</div>
+                        <span class="api-method method-post">POST</span>
+                    </div>
+                    <div class="api-body" id="add-task">
+                        <p><strong>Endpoint:</strong> /tasks</p>
+                        <p><strong>Description:</strong> Add a new task</p>
+                        <div class="form-group">
+                            <label>Task Text:</label>
+                            <input type="text" id="task-text" placeholder="Complete the dashboard feature" value="Test task from API tester">
+                        </div>
+                        <div class="form-group">
+                            <label>Date (YYYY-MM-DD):</label>
+                            <input type="date" id="task-date">
+                        </div>
+                        <div class="form-group">
+                            <label>Assigned To:</label>
+                            <input type="text" id="task-assignee" placeholder="Harsha (Me)" value="Harsha (Me)">
+                        </div>
+                        <button class="btn" onclick="testAddTask()">Add Task</button>
+                        <div class="response-section" id="add-task-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="add-task-status"></span>
+                            </div>
+                            <div class="response-body" id="add-task-body"></div>
+                        </div>
+                        <div class="loading" id="add-task-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Get Tasks -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('get-tasks')">
+                        <div class="api-title">Get All Tasks</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="get-tasks">
+                        <p><strong>Endpoint:</strong> /tasks</p>
+                        <p><strong>Description:</strong> Get all tasks</p>
+                        <button class="btn" onclick="testAPI('get-tasks', 'GET', '/tasks')">Get Tasks</button>
+                        <div class="response-section" id="get-tasks-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="get-tasks-status"></span>
+                            </div>
+                            <div class="response-body" id="get-tasks-body"></div>
+                        </div>
+                        <div class="loading" id="get-tasks-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Get Tasks by Date -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('get-tasks-date')">
+                        <div class="api-title">Get Tasks by Date</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="get-tasks-date">
+                        <p><strong>Endpoint:</strong> /tasks/{date}</p>
+                        <p><strong>Description:</strong> Get tasks for a specific date</p>
+                        <div class="form-group">
+                            <label>Date (YYYY-MM-DD):</label>
+                            <input type="date" id="tasks-date">
+                        </div>
+                        <button class="btn" onclick="testTasksByDate()">Get Tasks by Date</button>
+                        <div class="response-section" id="get-tasks-date-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="get-tasks-date-status"></span>
+                            </div>
+                            <div class="response-body" id="get-tasks-date-body"></div>
+                        </div>
+                        <div class="loading" id="get-tasks-date-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Add Transaction via Siri -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('siri-transaction')">
+                        <div class="api-title">Add Transaction (Siri)</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="siri-transaction">
+                        <p><strong>Endpoint:</strong> /siri/addTransaction</p>
+                        <p><strong>Description:</strong> Add transaction via Siri message</p>
+                        <div class="form-group">
+                            <label>Transaction Message:</label>
+                            <textarea id="transaction-message" placeholder="Your account has been debited Rs. 1500 for payment to Amazon">Your account has been debited Rs. 150 for payment to Swiggy via UPI</textarea>
+                        </div>
+                        <button class="btn" onclick="testSiriTransaction()">Add Transaction</button>
+                        <div class="response-section" id="siri-transaction-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="siri-transaction-status"></span>
+                            </div>
+                            <div class="response-body" id="siri-transaction-body"></div>
+                        </div>
+                        <div class="loading" id="siri-transaction-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Get Transactions -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('get-transactions')">
+                        <div class="api-title">Get Recent Transactions</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="get-transactions">
+                        <p><strong>Endpoint:</strong> /transactions</p>
+                        <p><strong>Description:</strong> Get recent transactions</p>
+                        <div class="form-group">
+                            <label>Limit:</label>
+                            <input type="number" id="transactions-limit" placeholder="5" value="5" min="1" max="50">
+                        </div>
+                        <button class="btn" onclick="testGetTransactions()">Get Transactions</button>
+                        <div class="response-section" id="get-transactions-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="get-transactions-status"></span>
+                            </div>
+                            <div class="response-body" id="get-transactions-body"></div>
+                        </div>
+                        <div class="loading" id="get-transactions-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Scheduler Debug -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('scheduler-debug')">
+                        <div class="api-title">Scheduler Status</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="scheduler-debug">
+                        <p><strong>Endpoint:</strong> /debug/scheduler</p>
+                        <p><strong>Description:</strong> Check scheduler status and statistics</p>
+                        <button class="btn" onclick="testAPI('scheduler-debug', 'GET', '/debug/scheduler')">Check Scheduler</button>
+                        <div class="response-section" id="scheduler-debug-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="scheduler-debug-status"></span>
+                            </div>
+                            <div class="response-body" id="scheduler-debug-body"></div>
+                        </div>
+                        <div class="loading" id="scheduler-debug-loading">Testing...</div>
+                    </div>
+                </div>
+
+                <!-- Trigger Scheduler -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('trigger-scheduler')">
+                        <div class="api-title">Trigger Scheduler</div>
+                        <span class="api-method method-get">GET</span>
+                    </div>
+                    <div class="api-body" id="trigger-scheduler">
+                        <p><strong>Endpoint:</strong> /debug/trigger-scheduler</p>
+                        <p><strong>Description:</strong> Manually trigger the Gmail scheduler</p>
+                        <button class="btn" onclick="testAPI('trigger-scheduler', 'GET', '/debug/trigger-scheduler')">Trigger Scheduler</button>
+                        <div class="response-section" id="trigger-scheduler-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Response:</h4>
+                                <span class="status-badge" id="trigger-scheduler-status"></span>
+                            </div>
+                            <div class="response-body" id="trigger-scheduler-body"></div>
+                        </div>
+                        <div class="loading" id="trigger-scheduler-loading">Testing...</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <script>
+            // Set default date to today
+            document.addEventListener('DOMContentLoaded', function() {
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('task-date').value = today;
+                document.getElementById('tasks-date').value = today;
+            });
+
+            function toggleSection(sectionId) {
+                const section = document.getElementById(sectionId);
+                section.classList.toggle('active');
+            }
+
+            async function testAPI(testId, method, endpoint, data = null) {
+                const loadingEl = document.getElementById(testId + '-loading');
+                const responseEl = document.getElementById(testId + '-response');
+                const statusEl = document.getElementById(testId + '-status');
+                const bodyEl = document.getElementById(testId + '-body');
+
+                // Show loading
+                loadingEl.style.display = 'block';
+                responseEl.style.display = 'none';
+
+                try {
+                    const options = {
+                        method: method,
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    };
+
+                    if (data) {
+                        options.body = JSON.stringify(data);
+                    }
+
+                    const response = await fetch(endpoint, options);
+                    const responseData = await response.text();
+
+                    // Update UI
+                    loadingEl.style.display = 'none';
+                    responseEl.style.display = 'block';
+                    
+                    statusEl.textContent = response.status + ' ' + response.statusText;
+                    statusEl.className = 'status-badge status-' + Math.floor(response.status / 100) + '00';
+                    
+                    try {
+                        const jsonData = JSON.parse(responseData);
+                        bodyEl.textContent = JSON.stringify(jsonData, null, 2);
+                    } catch {
+                        bodyEl.textContent = responseData;
+                    }
+
+                } catch (error) {
+                    loadingEl.style.display = 'none';
+                    responseEl.style.display = 'block';
+                    statusEl.textContent = 'Error';
+                    statusEl.className = 'status-badge status-500';
+                    bodyEl.textContent = 'Error: ' + error.message;
+                }
+            }
+
+            async function testUserConnections() {
+                const email = document.getElementById('connections-email').value;
+                await testAPI('connections', 'POST', '/user/connections', { userEmail: email });
+            }
+
+            async function testGmailCheck() {
+                const email = document.getElementById('gmail-email').value;
+                const minutes = document.getElementById('gmail-minutes').value;
+                const url = `/gmail/check-now?userEmail=${encodeURIComponent(email)}&minutes=${minutes}`;
+                await testAPI('gmail-check', 'GET', url);
+            }
+
+            async function testRefreshToken() {
+                const email = document.getElementById('refresh-email').value;
+                const url = `/gmail/refresh?userEmail=${encodeURIComponent(email)}`;
+                await testAPI('refresh-token', 'GET', url);
+            }
+
+            async function testAddTask() {
+                const text = document.getElementById('task-text').value;
+                const date = document.getElementById('task-date').value;
+                const assignedTo = document.getElementById('task-assignee').value;
+                
+                const data = {
+                    text: text,
+                    date: date,
+                    assignedTo: assignedTo
+                };
+                
+                await testAPI('add-task', 'POST', '/tasks', data);
+            }
+
+            async function testTasksByDate() {
+                const date = document.getElementById('tasks-date').value;
+                await testAPI('get-tasks-date', 'GET', `/tasks/${date}`);
+            }
+
+            async function testSiriTransaction() {
+                const message = document.getElementById('transaction-message').value;
+                const url = `/siri/addTransaction?message=${encodeURIComponent(message)}`;
+                await testAPI('siri-transaction', 'GET', url);
+            }
+
+            async function testGetTransactions() {
+                const limit = document.getElementById('transactions-limit').value;
+                const url = `/transactions?limit=${limit}`;
+                await testAPI('get-transactions', 'GET', url);
+            }
+        </script>
+    </body>
+    </html>
+    '''
+    return html_content
+
 @app.route('/debug/env')
 def debug_env():
     """Debug endpoint to check environment variables"""

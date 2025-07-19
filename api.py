@@ -15,6 +15,9 @@ import schedule
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
+
 # Initialize services
 firebase = FirebaseService()
 text_processor = TextProcessor()
@@ -1459,50 +1462,7 @@ def parse_transaction_data(subject, body, sender, date):
     card_match = re.search(r'\*{4}(\d{4})|ending\s+in\s+(\d{4})', text)
     account = f"****{card_match.group(1) or card_match.group(2)}" if card_match else 'Unknown'
     
-    # Parse date
-    transaction_date = datetime.now().isoformat()
-    if date:
-        try:
-            # Parse email date
-            parsed_date = parsedate_to_datetime(date)
-            transaction_date = parsed_date.isoformat()
-        except:
-            pass
-    
-    return {
-        'id': f"gmail_{int(datetime.now().timestamp())}_{hash(subject + body)%10000:04d}",
-        'amount': amount,
-        'currency': currency,  # Use detected currency (INR or USD)
-        'date': transaction_date,
-        'merchant': merchant,
-        'type': transaction_type,
-        'account': account,
-        'category': categorize_transaction(merchant, text),
-        'description': subject,
-        'source': 'gmail',
-        'processed': True,
-        'verified': False
-    }
-
-def categorize_transaction(merchant, text):
-    """Categorize transaction based on merchant and content"""
-    categories = {
-        'shopping': ['amazon', 'walmart', 'target', 'ebay', 'etsy'],
-        'food': ['restaurant', 'mcdonald', 'starbucks', 'pizza', 'food'],
-        'gas': ['shell', 'exxon', 'bp', 'chevron', 'gas', 'fuel'],
-        'entertainment': ['netflix', 'spotify', 'hulu', 'disney', 'movie'],
-        'utilities': ['electric', 'water', 'gas', 'internet', 'phone'],
-        'healthcare': ['pharmacy', 'doctor', 'hospital', 'medical'],
-        'transport': ['uber', 'lyft', 'taxi', 'bus', 'train']
-    }
-    
-    combined_text = f"{merchant} {text}".lower()
-    
-    for category, keywords in categories.items():
-        if any(keyword in combined_text for keyword in keywords):
-            return category
-    
-    return 'other'
+    # ...existing code...
 
 # Background email checking service
 def check_all_users_gmail():

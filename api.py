@@ -865,13 +865,12 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
         
         print(f"Processing {len(email_list)} emails...")
         
+        now_ist = datetime.now(ist_tz)
         for i, email_data in enumerate(email_list):
             print(f"Processing email {i+1}/{len(email_list)}: {email_data.get('id', 'unknown')}")
-            # Get full email content
             email = get_gmail_email(access_token, email_data['id'])
             if email:
                 print(f"Successfully retrieved email {i+1}")
-                # Extract email details
                 email_info = {
                     'id': email['id'],
                     'thread_id': email['threadId'],
@@ -883,6 +882,7 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                     'label_ids': email.get('labelIds', [])
                 }
                 # Convert Gmail internal date to IST
+                email_ist_dt = None
                 if email_info['internal_date']:
                     try:
                         timestamp_ms = int(email_info['internal_date'])
@@ -891,9 +891,16 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                         ist_dt = utc_dt.astimezone(ist_tz)
                         email_info['ist_date'] = ist_dt.strftime('%Y-%m-%d %H:%M:%S %Z')
                         email_info['ist_timestamp'] = ist_dt.isoformat()
+                        email_ist_dt = ist_dt
                     except:
                         email_info['ist_date'] = 'Unable to parse'
                         email_info['ist_timestamp'] = None
+                # Filter by IST date
+                if email_ist_dt:
+                    delta_minutes = (now_ist - email_ist_dt).total_seconds() / 60.0
+                    if delta_minutes > minutes or delta_minutes < 0:
+                        print(f"Skipping email {i+1}: outside requested time window")
+                        continue
                 # Extract subject, sender, and body
                 headers = email_info['payload'].get('headers', [])
                 for header in headers:
@@ -907,22 +914,36 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                         email_info['to'] = value
                     elif name == 'date':
                         email_info['date_header'] = value
-                # Extract email body and always include decoded text in response
                 body = extract_email_body(email_info['payload'])
-                email_info['body'] = body  # Always decoded, not truncated
-                # Try to extract transaction data
+                email_info['body'] = body  # Always decoded
                 transaction = extract_transaction_from_email(email)
                 if transaction:
                     print(f"Email {i+1} has transaction: {transaction.get('amount', 'unknown')} {transaction.get('currency', 'unknown')}")
-                    transaction['user_email'] = user_email
-                    transaction['source'] = 'gmail_manual'
-                    transaction['email_id'] = email_info['id']
-                    transaction['email_subject'] = email_info.get('subject', '')
-                    transaction['email_from'] = email_info.get('from', '')
-                    transaction['email_ist_date'] = email_info.get('ist_date', '')
-                    transactions.append(transaction)
+                    # Remove duplicate params and add decoded body
+                    transaction_clean = {
+                        'id': transaction.get('id'),
+                        'amount': transaction.get('amount'),
+                        'currency': transaction.get('currency'),
+                        'date': transaction.get('date'),
+                        'merchant': transaction.get('merchant'),
+                        'type': transaction.get('type'),
+                        'account': transaction.get('account'),
+                        'category': transaction.get('category'),
+                        'description': transaction.get('description'),
+                        'source': transaction.get('source'),
+                        'processed': transaction.get('processed'),
+                        'verified': transaction.get('verified'),
+                        'dashboard_user_email': user_email,
+                        'gmail_source': user_email,
+                        'email_id': email_info['id'],
+                        'email_subject': email_info.get('subject', ''),
+                        'email_from': email_info.get('from', ''),
+                        'email_ist_date': email_info.get('ist_date', ''),
+                        'body': body
+                    }
+                    transactions.append(transaction_clean)
                     email_info['has_transaction'] = True
-                    email_info['transaction_data'] = transaction
+                    email_info['transaction_data'] = transaction_clean
                 else:
                     print(f"Email {i+1} has no transaction data")
                     email_info['has_transaction'] = False

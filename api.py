@@ -57,19 +57,26 @@ def find_user_id_by_email(email):
 
 def store_user_transaction_in_file(user_email, transaction):
     """Store transaction in user's Firebase {user_id}.json with duplicate checking"""
+    error_reason = None
     try:
         # Find user_id from email by searching users
         user_id = find_user_id_by_email(user_email)
         if not user_id:
+            error_reason = "User ID not found for email"
             print(f"User ID not found for email: {user_email}")
-            return False
+            return {"stored": False, "error": error_reason}
 
         transaction['user_id'] = user_id
         transactions_path = f"{firebase.base_url}/{user_id}/transactions.json"
         # Get current transactions
         response = requests.get(transactions_path)
         if response.ok:
-            transactions = response.json() or []
+            data = response.json()
+            # If the file is empty or not a list, start with an empty list
+            if not data or not isinstance(data, list):
+                transactions = []
+            else:
+                transactions = data
         else:
             transactions = []
 
@@ -77,8 +84,9 @@ def store_user_transaction_in_file(user_email, transaction):
         transaction_id = transaction.get('id')
         existing_ids = [t.get('id') for t in transactions]
         if transaction_id in existing_ids:
+            error_reason = "Duplicate transaction ID"
             print(f"Transaction {transaction_id} already exists for user {user_id}, skipping...")
-            return False
+            return {"stored": False, "error": error_reason}
 
         # Also check by amount, date, and merchant for similar transactions
         new_amount = transaction.get('amount')
@@ -89,8 +97,9 @@ def store_user_transaction_in_file(user_email, transaction):
             existing_date = existing_tx.get('date', '')[:10]
             existing_merchant = existing_tx.get('merchant', '')
             if (existing_amount == new_amount and existing_date == new_date and existing_merchant == new_merchant):
+                error_reason = "Duplicate by amount/date/merchant"
                 print(f"Duplicate transaction detected for user {user_id}, skipping...")
-                return False
+                return {"stored": False, "error": error_reason}
 
         # Add new transaction to beginning of list
         transactions.insert(0, transaction)
@@ -101,10 +110,15 @@ def store_user_transaction_in_file(user_email, transaction):
         # Save back to Firebase
         response = requests.put(transactions_path, json=transactions)
         print(f"Stored new transaction {transaction_id} for user {user_id} in transactions.json")
-        return response.ok
+        if response.ok:
+            return {"stored": True}
+        else:
+            error_reason = f"Failed to save to Firebase: {response.status_code}"
+            return {"stored": False, "error": error_reason}
     except Exception as e:
+        error_reason = f"Exception: {str(e)}"
         print(f"Error storing transaction for user {user_email}: {str(e)}")
-        return False
+        return {"stored": False, "error": error_reason}
 
 @app.route('/health')
 def health():

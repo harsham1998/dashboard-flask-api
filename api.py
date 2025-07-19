@@ -1208,9 +1208,7 @@ def check_gmail_now():
                 'merchant': txn.get('merchant'),
                 'type': txn.get('type'),
                 'reference_number': txn.get('reference_number'),
-                'email_id': txn.get('email_id'),
                 'email_subject': txn.get('email_subject'),
-                'email_from': txn.get('email_from'),
                 'email_ist_date': txn.get('email_ist_date'),
                 'gmail_source': txn.get('gmail_source'),
                 'dashboard_user_email': txn.get('dashboard_user_email'),
@@ -1501,10 +1499,26 @@ def parse_transaction_email(text):
         if card_match:
             result['card_info'] = f"XX{card_match.group(1)}"
 
-        # Reference Number
-        ref_match = re.search(r'reference\s+(?:number|no\.?)\s+is\s+([\w\d]+)', text_lower)
-        if ref_match:
-            result['reference_number'] = ref_match.group(1)
+        # Reference Number (expanded robust extraction)
+        ref_patterns = [
+            r'(?:reference\s*(?:number|no\.?|:|#)?|ref\s*(?:no\.?|:|#)?|ref[:#]?|transaction\s*(?:id|number|no\.?|:|#)?|txn\s*(?:id|number|no\.?|:|#)?|utr\s*(?:no\.?|number|:|#)?|auth\s*(?:code|#:|#)?|approval\s*(?:code|#:|#)?)\s*([A-Za-z0-9]{6,})',
+            r'(?:utr[:#]?|utr\s*(?:no\.?|number|:|#)?)\s*([A-Za-z0-9]{6,})',
+            r'(?:transaction[:#]?|transaction\s*(?:id|number|no\.?|:|#)?)\s*([A-Za-z0-9]{6,})',
+            r'(?:auth[:#]?|auth\s*(?:code|#:|#)?)\s*([A-Za-z0-9]{6,})',
+            r'(?:approval[:#]?|approval\s*(?:code|#:|#)?)\s*([A-Za-z0-9]{6,})',
+            r'(?:ref[:#]?|ref\s*(?:no\.?|:|#)?)\s*([A-Za-z0-9]{6,})',
+        ]
+        ref_match = None
+        for pat in ref_patterns:
+            ref_match = re.search(pat, text_lower)
+            if ref_match:
+                result['reference_number'] = ref_match.group(1)
+                break
+        # Fallback: any 6+ digit/char alphanumeric after 'reference', 'txn', 'utr', 'auth', 'approval', 'ref'
+        if not result.get('reference_number'):
+            fallback_match = re.search(r'(reference|txn|utr|auth|approval|ref)[^A-Za-z0-9]{0,10}([A-Za-z0-9]{6,})', text_lower)
+            if fallback_match:
+                result['reference_number'] = fallback_match.group(2)
 
         # Date
         date_match = re.search(r'on\s+(\d{2}[-/]\d{2}[-/]\d{2,4})', text_lower)

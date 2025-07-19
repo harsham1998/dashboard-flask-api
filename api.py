@@ -916,10 +916,9 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                         email_info['date_header'] = value
                 body = extract_email_body(email_info['payload'])
                 email_info['body'] = body  # Always decoded
-                transaction = extract_transaction_from_email(email)
+                transaction, transaction_log = extract_transaction_from_email(email)
                 if transaction:
                     print(f"Email {i+1} has transaction: {transaction.get('amount', 'unknown')} {transaction.get('currency', 'unknown')}")
-                    # Remove duplicate params and add decoded body
                     transaction_clean = {
                         'id': transaction.get('id'),
                         'amount': transaction.get('amount'),
@@ -944,10 +943,12 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                     transactions.append(transaction_clean)
                     email_info['has_transaction'] = True
                     email_info['transaction_data'] = transaction_clean
+                    email_info['not_transaction_reason'] = None
                 else:
-                    print(f"Email {i+1} has no transaction data")
+                    print(f"Email {i+1} has no transaction data: {transaction_log}")
                     email_info['has_transaction'] = False
                     email_info['transaction_data'] = None
+                    email_info['not_transaction_reason'] = transaction_log
                 all_emails.append(email_info)
             else:
                 print(f"Failed to retrieve email {i+1}")

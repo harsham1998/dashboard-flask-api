@@ -1381,33 +1381,46 @@ def extract_transaction_from_email(email):
 
 def parse_transaction_data(subject, body, sender, date):
     """Parse transaction data from email content with robust Indian transaction detection"""
+
     text = f"{subject} {body}".lower()
-    
+    sender_lower = sender.lower() if sender else ""
+
+    # Keywords for transaction identification
+    bank_keywords = [
+        "hdfc", "icici", "sbi", "axis", "kotak", "pnb", "canara", "union", "paytm", "phonepe", "googlepay", "amazonpay", "mobikwik", "freecharge", "bank", "card", "rupay", "mastercard", "visa"
+    ]
+    txn_keywords = [
+        "transaction", "upi", "credit", "debit", "sent", "txn", "received", "transfer", "payment", "deposit", "withdraw", "statement", "alert", "balance", "refund", "purchase", "charged"
+    ]
+
+    # Check for bank keywords in sender
+    sender_has_bank = any(word in sender_lower for word in bank_keywords)
+    # Check for transaction keywords in subject or body
+    subject_has_txn = any(word in subject.lower() for word in txn_keywords + bank_keywords)
+    body_has_txn = any(word in body.lower() for word in txn_keywords + bank_keywords)
+
     # Enhanced amount patterns for Indian transactions (INR, Rs., etc.)
     amount_patterns = [
-        # Indian currency patterns (more robust for Rs)
-        r'rs[\.\s]*([0-9,]+\.?\d{0,2})',  # Rs.2000.00, Rs 2000.00, Rs2000.00
-        r'inr\s*([0-9,]+\.?\d{0,2})',   # INR 500.00
-        r'₹\s*([0-9,]+\.?\d{0,2})',     # ₹500.00
-        r'amount:?\s*rs[\.\s]*([0-9,]+\.?\d{0,2})',  # Amount: Rs. 500
-        r'credited.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',  # credited Rs. 500
-        r'debited.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',   # debited Rs. 500
-        r'paid.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',      # paid Rs. 500
-        r'charged.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',   # charged Rs. 500
-        r'received.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',  # received Rs. 500
-        r'transfer.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',  # transfer Rs. 500
-        r'upi.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',       # UPI Rs. 500
-        # US dollar patterns (fallback)
+        r'rs[\.\s]*([0-9,]+\.?\d{0,2})',
+        r'inr\s*([0-9,]+\.?\d{0,2})',
+        r'₹\s*([0-9,]+\.?\d{0,2})',
+        r'amount:?\s*rs[\.\s]*([0-9,]+\.?\d{0,2})',
+        r'credited.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
+        r'debited.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
+        r'paid.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
+        r'charged.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
+        r'received.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
+        r'transfer.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
+        r'upi.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
         r'\$([0-9,]+\.?\d{0,2})',
         r'amount:?\s*\$?([0-9,]+\.?\d{0,2})',
         r'charged?\s*\$?([0-9,]+\.?\d{0,2})',
         r'paid?\s*\$?([0-9,]+\.?\d{0,2})'
     ]
-    
+
     # Find amount and determine currency
     amount = None
-    currency = 'INR'  # Default to INR for Indian transactions
-    
+    currency = 'INR'
     for i, pattern in enumerate(amount_patterns):
         match = re.search(pattern, text)
         if match:
@@ -1415,16 +1428,27 @@ def parse_transaction_data(subject, body, sender, date):
             try:
                 amount = float(amount_str)
                 if amount > 0:
-                    # Set currency based on pattern
-                    if i >= len(amount_patterns) - 4:  # Last 4 patterns are USD
+                    if i >= len(amount_patterns) - 4:
                         currency = 'USD'
                     else:
                         currency = 'INR'
                     break
             except ValueError:
                 continue
-    
-    if not amount:
+
+    # Transaction identification logic
+    is_transaction = False
+    # If amount is found, always consider as transaction
+    if amount:
+        is_transaction = True
+    # If sender is bank and subject/body has transaction keywords, consider as transaction
+    elif sender_has_bank and (subject_has_txn or body_has_txn):
+        is_transaction = True
+    # If subject and body both have transaction keywords, consider as transaction
+    elif subject_has_txn and body_has_txn:
+        is_transaction = True
+
+    if not is_transaction:
         return None
     
     # Extract merchant with enhanced patterns for Indian transactions

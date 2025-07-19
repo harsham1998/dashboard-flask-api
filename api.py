@@ -916,7 +916,7 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                         email_info['date_header'] = value
                 body = extract_email_body(email_info['payload'])
                 email_info['body'] = body  # Always decoded
-                transaction = extract_transaction_from_email(email)
+                transaction, transaction_log = extract_transaction_from_email(email, return_log=True)
                 if transaction:
                     print(f"Email {i+1} has transaction: {transaction.get('amount', 'unknown')} {transaction.get('currency', 'unknown')}")
                     # Remove duplicate params and add decoded body
@@ -945,7 +945,7 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                     email_info['has_transaction'] = True
                     email_info['transaction_data'] = transaction_clean
                 else:
-                    print(f"Email {i+1} has no transaction data")
+                    print(f"Email {i+1} not a transaction: {transaction_log}")
                     email_info['has_transaction'] = False
                     email_info['transaction_data'] = None
                 all_emails.append(email_info)
@@ -1349,37 +1349,45 @@ def get_gmail_email(access_token, message_id):
         print(f"Get email error: {str(e)}")
         return None
 
-def extract_transaction_from_email(email):
-    """Extract transaction data from email"""
+def extract_transaction_from_email(email, return_log=False):
+    """Extract transaction data from email, optionally returning log info"""
     try:
         payload = email.get('payload', {})
         headers = payload.get('headers', [])
-        
+
         # Get email metadata
         subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
         sender = next((h['value'] for h in headers if h['name'] == 'From'), '')
         date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-        
+
         # Get email body
         body = extract_email_body(payload)
-        
+
         # Extract transaction details
-        transaction = parse_transaction_data(subject, body, sender, date)
-        
+        transaction, transaction_log = parse_transaction_data(subject, body, sender, date, return_log=True)
+
         if transaction:
             transaction['emailId'] = email['id']
             transaction['emailSubject'] = subject
             transaction['emailFrom'] = sender
             transaction['emailDate'] = date
-            
-        return transaction
-        
+        if return_log:
+            return transaction, transaction_log
+        else:
+            return transaction
+
     except Exception as e:
         print(f"Extract transaction error: {str(e)}")
+        if return_log:
+            return None, str(e)
         return None
 
 
 def parse_transaction_data(subject, body, sender, date):
+    """Parse transaction data from email content with robust Indian transaction detection"""
+
+    text = f"{subject} {body}".lower()
+def parse_transaction_data(subject, body, sender, date, return_log=False):
     """Parse transaction data from email content with robust Indian transaction detection"""
 
     text = f"{subject} {body}".lower()
@@ -1464,7 +1472,9 @@ def parse_transaction_data(subject, body, sender, date):
             log_reasons.append("Body does not have transaction keyword.")
 
     if not is_transaction:
-        print(f"[Transaction Detection] Not a transaction. Subject: '{subject}', Sender: '{sender}', Body: '{body[:100]}...'. Reasons: {log_reasons}")
+        log_msg = f"Subject: '{subject}', Sender: '{sender}', Body: '{body[:100]}...'. Reasons: {log_reasons}"
+        if return_log:
+            return None, log_msg
         return None
 
     # Extract merchant with enhanced patterns for Indian transactions
@@ -1500,10 +1510,6 @@ def parse_transaction_data(subject, body, sender, date):
     account = f"****{card_match.group(1) or card_match.group(2)}" if card_match else 'Unknown'
     
     # ...existing code...
-
-# Background email checking service
-def check_all_users_gmail():
-    """Check Gmail for all users and extract transactions - Enhanced version"""
     global scheduler_stats
     
     try:

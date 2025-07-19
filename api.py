@@ -838,15 +838,9 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
             'alert', 'notification', 'statement', 'balance', 'withdraw', 'deposit'
         ]
         
-        # Create search query with OR conditions
-        search_query = ' OR '.join(search_query_parts)
-        
-        # Add time filter
-        if minutes > 60:
-            hours_ago = max(1, int(minutes / 60))
-            search_query += f' newer_than:{hours_ago}h'
-        else:
-            search_query += f' newer_than:{minutes}m'
+        # Create search query with OR conditions and proper time filter
+        time_filter = f'newer_than:{minutes}m' if minutes <= 60 else f'newer_than:{max(1, int(minutes / 60))}h'
+        search_query = f'({" OR ".join(search_query_parts)}) {time_filter}'
         
         print(f"Gmail search query: {search_query}")
         print(f"Searching for emails in last {minutes} minutes...")
@@ -856,31 +850,19 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
         
         print(f"Found {len(email_list)} emails from Gmail API")
         
-        # If no emails found with transaction terms, try a broader search
+        # If no emails found with transaction terms, try a time-only search
         if not email_list:
-            print("No emails found with transaction terms, trying broader search...")
-            broader_query = f'newer_than:{minutes}m'
-            email_list = search_gmail_emails(access_token, broader_query, max_results=20)
-            print(f"Found {len(email_list)} emails with broader search")
+            print(f"No emails found with transaction terms, trying time-only search for last {minutes} minutes...")
+            time_only_query = time_filter
+            email_list = search_gmail_emails(access_token, time_only_query, max_results=20)
+            print(f"Found {len(email_list)} emails with time-only search")
             
-        # If still no emails, try without time filter for testing
-        if not email_list:
-            print("No emails found with time filter, trying without time filter for testing...")
-            test_query = ' OR '.join(search_query_parts[:5])  # Just first 5 terms
-            email_list = search_gmail_emails(access_token, test_query, max_results=10)
-            print(f"Found {len(email_list)} emails without time filter")
-            
-        # If still no emails, try getting recent emails without any filters
-        if not email_list:
-            print("No emails found with any search terms, trying to get recent emails...")
-            email_list = search_gmail_emails(access_token, f'newer_than:{minutes}m', max_results=10)
-            print(f"Found {len(email_list)} recent emails")
-            
-        # If still no emails, try getting any emails (for debugging)
-        if not email_list:
-            print("No emails found at all, trying to get any emails for debugging...")
-            email_list = search_gmail_emails(access_token, '', max_results=5)
-            print(f"Found {len(email_list)} total emails")
+        # Final fallback only if debugging is needed (remove transaction filtering)
+        if not email_list and minutes > 60:  # Only for longer periods
+            print("No emails found with time filter, trying broader time range for debugging...")
+            fallback_query = f'newer_than:1d'  # Last day for debugging
+            email_list = search_gmail_emails(access_token, fallback_query, max_results=5)
+            print(f"Found {len(email_list)} emails with fallback search (debugging)")
         
         # IST timezone
         ist_tz = pytz.timezone('Asia/Kolkata')
@@ -1097,6 +1079,72 @@ def find_user_by_gmail_account(gmail_account):
         print(f"Error finding user by Gmail account: {str(e)}")
         return None
 
+def validate_and_refresh_token(user_email, user_data):
+    """Validate access token and refresh if expired"""
+    try:
+        tokens = user_data['gmailTokens']
+        access_token = tokens.get('access_token')
+        
+        if not access_token:
+            return None, "No access token found"
+        
+        # Test if the token is valid by making a simple API call
+        headers = {'Authorization': f'Bearer {access_token}'}
+        test_response = requests.get(
+            'https://gmail.googleapis.com/gmail/v1/users/me/profile',
+            headers=headers
+        )
+        
+        if test_response.status_code == 200:
+            print(f"Access token is valid for {user_email}")
+            return tokens, None
+        elif test_response.status_code == 401:
+            print(f"Access token expired for {user_email}, refreshing...")
+            
+            # Token is expired, refresh it
+            refresh_token = tokens.get('refresh_token')
+            if not refresh_token:
+                return None, "No refresh token available"
+            
+            # Refresh the token
+            token_data = {
+                'client_id': GMAIL_CONFIG['client_id'],
+                'client_secret': GMAIL_CONFIG['client_secret'],
+                'refresh_token': refresh_token,
+                'grant_type': 'refresh_token'
+            }
+            
+            refresh_response = requests.post(
+                'https://oauth2.googleapis.com/token',
+                data=token_data
+            )
+            
+            if not refresh_response.ok:
+                return None, f"Token refresh failed: {refresh_response.text}"
+            
+            new_tokens = refresh_response.json()
+            
+            if 'error' in new_tokens:
+                return None, f"Token refresh error: {new_tokens['error']}"
+            
+            # Update tokens in the current data and Firebase
+            tokens['access_token'] = new_tokens['access_token']
+            tokens['token_type'] = new_tokens.get('token_type', 'Bearer')
+            tokens['expires_in'] = new_tokens.get('expires_in', 3600)
+            tokens['last_refreshed'] = datetime.now().isoformat()
+            
+            user_data['gmailTokens'] = tokens
+            user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
+            firebase.update_user_data(user_email_key, user_data)
+            
+            print(f"Token refreshed successfully for {user_email}")
+            return tokens, None
+        else:
+            return None, f"Token validation failed with status: {test_response.status_code}"
+            
+    except Exception as e:
+        return None, f"Token validation error: {str(e)}"
+
 @app.route('/gmail/check-now')
 def check_gmail_now():
     """Manually check Gmail for transactions with dynamic time parameter - returns all emails and transactions"""
@@ -1118,10 +1166,13 @@ def check_gmail_now():
         if not user_data or 'gmailTokens' not in user_data:
             return jsonify({'error': 'No Gmail tokens found'}), 400
         
-        tokens = user_data['gmailTokens']
+        if not user_data['gmailTokens'].get('connected'):
+            return jsonify({'error': 'Gmail not connected'}), 400
         
-        if not tokens.get('connected') or not tokens.get('access_token'):
-            return jsonify({'error': 'Gmail not connected or no access token'}), 400
+        # Validate and refresh token if needed
+        tokens, error = validate_and_refresh_token(user_email, user_data)
+        if error:
+            return jsonify({'error': f'Token validation/refresh failed: {error}'}), 400
         
         # Find the actual user who owns this Gmail account
         if not actual_user_email:
@@ -1171,6 +1222,11 @@ def check_gmail_now():
                 'gmail_account': user_email,
                 'actual_user': storage_user_email,
                 'mapping_method': 'auto-detected' if not request.args.get('actualUserEmail') else 'manual'
+            },
+            'token_info': {
+                'access_token_validated': True,
+                'token_refreshed': tokens.get('last_refreshed') is not None,
+                'last_refreshed': tokens.get('last_refreshed')
             }
         })
         

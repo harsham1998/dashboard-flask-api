@@ -1377,11 +1377,14 @@ def clean_email_body(raw_body):
     """
     try:
         # Unescape unicode (\u003C etc.)
-        # Use 'raw_unicode_escape' to avoid SyntaxError on truncated \uXXXX
-        raw_body = bytes(raw_body, "utf-8").decode("raw_unicode_escape")
+        try:
+            raw_body_decoded = bytes(raw_body, "utf-8").decode("raw_unicode_escape")
+        except Exception as decode_err:
+            # If decoding fails, fallback to original text
+            raw_body_decoded = raw_body
 
         # Unescape HTML entities
-        unescaped = html.unescape(raw_body)
+        unescaped = html.unescape(raw_body_decoded)
 
         # Remove tracking links like <https://...>
         unescaped = re.sub(r'<https?://[^>]+>', '', unescaped)

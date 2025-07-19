@@ -840,7 +840,7 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
         
         # Create search query with OR conditions and proper time filter
         time_filter = f'newer_than:{minutes}m' if minutes <= 60 else f'newer_than:{max(1, int(minutes / 60))}h'
-        search_query = f'({" OR ".join(search_query_parts)}) {time_filter}'
+        search_query = f'({" AND ".join(search_query_parts)}) {time_filter}'
         
         print(f"Gmail search query: {search_query}")
         print(f"Searching for emails in last {minutes} minutes...")

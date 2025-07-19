@@ -1378,7 +1378,8 @@ def clean_email_body(raw_body):
     """
     try:
         # Unescape unicode (\u003C etc.)
-        raw_body = bytes(raw_body, "utf-8").decode("unicode_escape")
+        # Use 'raw_unicode_escape' to avoid SyntaxError on truncated \uXXXX
+        raw_body = bytes(raw_body, "utf-8").decode("raw_unicode_escape")
 
         # Unescape HTML entities
         unescaped = html.unescape(raw_body)

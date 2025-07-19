@@ -822,31 +822,24 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
     try:
         access_token = gmail_tokens['access_token']
         
-        # Build comprehensive search query for transaction-related emails
+        # Build comprehensive search query for transaction-related emails, exclude promotions
         search_query_parts = [
-            # Financial terms
             'transaction', 'payment', 'purchase', 'charge', 'debit', 'credit', 'receipt', 'invoice',
-            # Indian banking terms
             'bank', 'upi', 'transfer', 'credited', 'debited', 'rs', 'inr', 'rupees',
-            # Bank names
             'hdfc', 'icici', 'sbi', 'axis', 'kotak', 'pnb', 'canara', 'union',
-            # Digital wallets
             'paytm', 'phonepe', 'googlepay', 'amazonpay', 'mobikwik', 'freecharge',
-            # Card companies
             'visa', 'mastercard', 'rupay',
-            # Common transaction terms
             'alert', 'notification', 'statement', 'balance', 'withdraw', 'deposit'
         ]
-        
-        # Create search query with OR conditions and proper time filter
+        # Exclude category:promotions
         time_filter = f'newer_than:{minutes}m' if minutes <= 60 else f'newer_than:{max(1, int(minutes / 60))}h'
-        search_query = f'({" AND ".join(search_query_parts)}) {time_filter}'
+        search_query = f'({" OR ".join(search_query_parts)}) {time_filter} -category:promotions'
         
         print(f"Gmail search query: {search_query}")
         print(f"Searching for emails in last {minutes} minutes...")
         
-        # Get emails from Gmail API
-        email_list = search_gmail_emails(access_token, search_query, max_results=50)
+        # Get emails from Gmail API (limit to 20 for 5min, can be tuned)
+        email_list = search_gmail_emails(access_token, search_query, max_results=20)
         
         print(f"Found {len(email_list)} emails from Gmail API")
         
@@ -874,10 +867,8 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
         
         for i, email_data in enumerate(email_list):
             print(f"Processing email {i+1}/{len(email_list)}: {email_data.get('id', 'unknown')}")
-            
             # Get full email content
             email = get_gmail_email(access_token, email_data['id'])
-            
             if email:
                 print(f"Successfully retrieved email {i+1}")
                 # Extract email details
@@ -891,11 +882,9 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                     'internal_date': email.get('internalDate', ''),
                     'label_ids': email.get('labelIds', [])
                 }
-                
                 # Convert Gmail internal date to IST
                 if email_info['internal_date']:
                     try:
-                        # Gmail internal date is Unix timestamp in milliseconds
                         timestamp_ms = int(email_info['internal_date'])
                         timestamp_s = timestamp_ms / 1000
                         utc_dt = datetime.fromtimestamp(timestamp_s, tz=pytz.UTC)
@@ -905,13 +894,11 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                     except:
                         email_info['ist_date'] = 'Unable to parse'
                         email_info['ist_timestamp'] = None
-                
                 # Extract subject, sender, and body
                 headers = email_info['payload'].get('headers', [])
                 for header in headers:
                     name = header.get('name', '').lower()
                     value = header.get('value', '')
-                    
                     if name == 'subject':
                         email_info['subject'] = value
                     elif name == 'from':
@@ -920,21 +907,13 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                         email_info['to'] = value
                     elif name == 'date':
                         email_info['date_header'] = value
-                
-                # Extract email body
+                # Extract email body and always include decoded text in response
                 body = extract_email_body(email_info['payload'])
-                email_info['body'] = body[:500] + '...' if len(body) > 500 else body  # Truncate for response size
-                email_info['full_body'] = body  # Keep full body for transaction extraction
-                
-                print(f"Email {i+1} subject: {email_info.get('subject', 'No subject')}")
-                print(f"Email {i+1} body length: {len(body)}")
-                print(f"Email {i+1} body preview: {body[:100]}...")
-                
+                email_info['body'] = body  # Always decoded, not truncated
                 # Try to extract transaction data
                 transaction = extract_transaction_from_email(email)
                 if transaction:
                     print(f"Email {i+1} has transaction: {transaction.get('amount', 'unknown')} {transaction.get('currency', 'unknown')}")
-                    # Add user information and email details
                     transaction['user_email'] = user_email
                     transaction['source'] = 'gmail_manual'
                     transaction['email_id'] = email_info['id']
@@ -948,10 +927,6 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                     print(f"Email {i+1} has no transaction data")
                     email_info['has_transaction'] = False
                     email_info['transaction_data'] = None
-                
-                # Remove full_body from email_info to reduce response size
-                del email_info['full_body']
-                
                 all_emails.append(email_info)
             else:
                 print(f"Failed to retrieve email {i+1}")

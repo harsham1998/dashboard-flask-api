@@ -1376,15 +1376,15 @@ def clean_email_body(raw_body):
     Cleans a raw Gmail email body string with \uXXXX, links, tags, etc.
     """
     try:
-        # Unescape unicode (\u003C etc.)
-        try:
-            raw_body_decoded = bytes(raw_body, "utf-8").decode("raw_unicode_escape")
-        except Exception as decode_err:
-            # If decoding fails, fallback to original text
-            raw_body_decoded = raw_body
+        # Instead of decoding unicode, just replace common unicode escapes manually
+        # Replace \u003C and \u003E with < and >
+        safe_body = re.sub(r'\\u003[Cc]', '<', raw_body)
+        safe_body = re.sub(r'\\u003[Ee]', '>', safe_body)
+        # Replace other \uXXXX escapes with a placeholder
+        safe_body = re.sub(r'\\u[0-9A-Fa-f]{4}', '', safe_body)
 
         # Unescape HTML entities
-        unescaped = html.unescape(raw_body_decoded)
+        unescaped = html.unescape(safe_body)
 
         # Remove tracking links like <https://...>
         unescaped = re.sub(r'<https?://[^>]+>', '', unescaped)

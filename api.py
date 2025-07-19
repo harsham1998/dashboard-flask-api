@@ -63,22 +63,19 @@ def store_user_transaction_in_file(user_email, transaction):
         if not user_id:
             print(f"User ID not found for email: {user_email}")
             return False
-            
-        transaction['user_id'] = user_id
-        user_file_path = f"{firebase.base_url}/{user_id}.json"
-        response = requests.get(user_file_path)
-        if response.ok:
-            user_data = response.json() or {}
-        else:
-            user_data = {}
 
-        # Initialize transactions array if not exists
-        if 'transactions' not in user_data:
-            user_data['transactions'] = []
+        transaction['user_id'] = user_id
+        transactions_path = f"{firebase.base_url}/{user_id}/transactions.json"
+        # Get current transactions
+        response = requests.get(transactions_path)
+        if response.ok:
+            transactions = response.json() or []
+        else:
+            transactions = []
 
         # Check for duplicate transactions
         transaction_id = transaction.get('id')
-        existing_ids = [t.get('id') for t in user_data['transactions']]
+        existing_ids = [t.get('id') for t in transactions]
         if transaction_id in existing_ids:
             print(f"Transaction {transaction_id} already exists for user {user_id}, skipping...")
             return False
@@ -87,7 +84,7 @@ def store_user_transaction_in_file(user_email, transaction):
         new_amount = transaction.get('amount')
         new_date = transaction.get('date', '')[:10]
         new_merchant = transaction.get('merchant', '')
-        for existing_tx in user_data['transactions']:
+        for existing_tx in transactions:
             existing_amount = existing_tx.get('amount')
             existing_date = existing_tx.get('date', '')[:10]
             existing_merchant = existing_tx.get('merchant', '')
@@ -96,14 +93,14 @@ def store_user_transaction_in_file(user_email, transaction):
                 return False
 
         # Add new transaction to beginning of list
-        user_data['transactions'].insert(0, transaction)
+        transactions.insert(0, transaction)
         # Keep only last 50 transactions
-        if len(user_data['transactions']) > 50:
-            user_data['transactions'] = user_data['transactions'][:50]
+        if len(transactions) > 50:
+            transactions = transactions[:50]
 
         # Save back to Firebase
-        response = requests.put(user_file_path, json=user_data)
-        print(f"Stored new transaction {transaction_id} for user {user_id}")
+        response = requests.put(transactions_path, json=transactions)
+        print(f"Stored new transaction {transaction_id} for user {user_id} in transactions.json")
         return response.ok
     except Exception as e:
         print(f"Error storing transaction for user {user_email}: {str(e)}")

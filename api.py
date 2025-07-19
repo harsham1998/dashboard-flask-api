@@ -795,6 +795,18 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
             test_query = ' OR '.join(search_query_parts[:5])  # Just first 5 terms
             email_list = search_gmail_emails(access_token, test_query, max_results=10)
             print(f"Found {len(email_list)} emails without time filter")
+            
+        # If still no emails, try getting recent emails without any filters
+        if not email_list:
+            print("No emails found with any search terms, trying to get recent emails...")
+            email_list = search_gmail_emails(access_token, f'newer_than:{minutes}m', max_results=10)
+            print(f"Found {len(email_list)} recent emails")
+            
+        # If still no emails, try getting any emails (for debugging)
+        if not email_list:
+            print("No emails found at all, trying to get any emails for debugging...")
+            email_list = search_gmail_emails(access_token, '', max_results=5)
+            print(f"Found {len(email_list)} total emails")
         
         # IST timezone
         ist_tz = pytz.timezone('Asia/Kolkata')
@@ -802,11 +814,16 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
         all_emails = []
         transactions = []
         
-        for email_data in email_list:
+        print(f"Processing {len(email_list)} emails...")
+        
+        for i, email_data in enumerate(email_list):
+            print(f"Processing email {i+1}/{len(email_list)}: {email_data.get('id', 'unknown')}")
+            
             # Get full email content
             email = get_gmail_email(access_token, email_data['id'])
             
             if email:
+                print(f"Successfully retrieved email {i+1}")
                 # Extract email details
                 email_info = {
                     'id': email['id'],
@@ -853,9 +870,14 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                 email_info['body'] = body[:500] + '...' if len(body) > 500 else body  # Truncate for response size
                 email_info['full_body'] = body  # Keep full body for transaction extraction
                 
+                print(f"Email {i+1} subject: {email_info.get('subject', 'No subject')}")
+                print(f"Email {i+1} body length: {len(body)}")
+                print(f"Email {i+1} body preview: {body[:100]}...")
+                
                 # Try to extract transaction data
                 transaction = extract_transaction_from_email(email)
                 if transaction:
+                    print(f"Email {i+1} has transaction: {transaction.get('amount', 'unknown')} {transaction.get('currency', 'unknown')}")
                     # Add user information and email details
                     transaction['user_email'] = user_email
                     transaction['source'] = 'gmail_manual'
@@ -867,6 +889,7 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                     email_info['has_transaction'] = True
                     email_info['transaction_data'] = transaction
                 else:
+                    print(f"Email {i+1} has no transaction data")
                     email_info['has_transaction'] = False
                     email_info['transaction_data'] = None
                 
@@ -874,6 +897,10 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                 del email_info['full_body']
                 
                 all_emails.append(email_info)
+            else:
+                print(f"Failed to retrieve email {i+1}")
+        
+        print(f"Final results: {len(all_emails)} emails processed, {len(transactions)} transactions found")
         
         return {
             'emails': all_emails,
@@ -1169,9 +1196,11 @@ def search_gmail_emails(access_token, query, max_results=50):
         return []
 
 def get_gmail_email(access_token, message_id):
-    """Get full Gmail email content"""
+    """Get full Gmail email content with enhanced debugging"""
     try:
         headers = {'Authorization': f'Bearer {access_token}'}
+        
+        print(f"Fetching email with ID: {message_id}")
         
         response = requests.get(
             f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}',
@@ -1179,10 +1208,15 @@ def get_gmail_email(access_token, message_id):
             params={'format': 'full'}
         )
         
+        print(f"Gmail email API response status: {response.status_code}")
+        
         if response.ok:
-            return response.json()
+            email_data = response.json()
+            print(f"Successfully retrieved email data, keys: {list(email_data.keys())}")
+            return email_data
         else:
             print(f"Gmail get email error: {response.status_code}")
+            print(f"Response content: {response.text}")
             return None
             
     except Exception as e:

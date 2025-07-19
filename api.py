@@ -1354,32 +1354,24 @@ def extract_transaction_from_email(email):
     try:
         payload = email.get('payload', {})
         headers = payload.get('headers', [])
-        
-        # Get email metadata
         subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
         sender = next((h['value'] for h in headers if h['name'] == 'From'), '')
         date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-        
-        # Get email body
         body = extract_email_body(payload)
-        
-        # Extract transaction details
-        transaction = parse_transaction_data(subject, body, sender, date)
-        
+        transaction, transaction_log = parse_transaction_data(subject, body, sender, date, return_log=True)
         if transaction:
             transaction['emailId'] = email['id']
             transaction['emailSubject'] = subject
             transaction['emailFrom'] = sender
             transaction['emailDate'] = date
-            
-        return transaction
+        return transaction, transaction_log
         
     except Exception as e:
         print(f"Extract transaction error: {str(e)}")
         return None
 
 
-def parse_transaction_data(subject, body, sender, date):
+def parse_transaction_data(subject, body, sender, date, return_log=False):
     """Parse transaction data from email content with robust Indian transaction detection"""
 
     text = f"{subject} {body}".lower()
@@ -1449,7 +1441,19 @@ def parse_transaction_data(subject, body, sender, date):
         is_transaction = True
 
     if not is_transaction:
-        return None
+        log_reason = None
+        if not body:
+            log_reason = 'Email body is empty.'
+        elif not (sender_has_bank or subject_has_txn or body_has_txn):
+            log_reason = 'No bank or transaction keywords found.'
+        elif not amount:
+            log_reason = 'No amount found.'
+        else:
+            log_reason = 'Does not match transaction patterns.'
+        if return_log:
+            return None, log_reason
+        else:
+            return None
     
     # Extract merchant with enhanced patterns for Indian transactions
     merchant_patterns = [
@@ -1482,8 +1486,23 @@ def parse_transaction_data(subject, body, sender, date):
     # Extract card info
     card_match = re.search(r'\*{4}(\d{4})|ending\s+in\s+(\d{4})', text)
     account = f"****{card_match.group(1) or card_match.group(2)}" if card_match else 'Unknown'
-    
-    # ...existing code...
+    transaction = {
+        'amount': amount,
+        'currency': currency,
+        'date': date,
+        'merchant': merchant,
+        'type': transaction_type,
+        'account': account,
+        'category': 'Unknown',
+        'description': subject,
+        'source': sender,
+        'processed': False,
+        'verified': False
+    }
+    if return_log:
+        return transaction, None
+    else:
+        return transaction
 
 # Background email checking service
 def check_all_users_gmail():

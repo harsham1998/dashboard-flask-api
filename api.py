@@ -57,33 +57,142 @@ def home():
         'time': datetime.now().isoformat()
     })
 
+@app.route('/test_api.html')
+def serve_test_api():
+    """Serve the test API HTML interface"""
+    try:
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        test_api_path = os.path.join(current_dir, 'test_api.html')
+        
+        with open(test_api_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        from flask import Response
+        return Response(content, mimetype='text/html')
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to load test API interface',
+            'message': str(e)
+        }), 500
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'firebase_connection': 'active'
+    })
+
+@app.route('/debug/env')
+def debug_env():
+    """Debug endpoint to check environment variables"""
+    return jsonify({
+        'gmail_client_id': 'Set' if GMAIL_CONFIG['client_id'] else 'Missing',
+        'gmail_client_secret': 'Set' if GMAIL_CONFIG['client_secret'] else 'Missing',
+        'redirect_uri': GMAIL_CONFIG['redirect_uri'],
+        'environment_variables': {
+            'GMAIL_CLIENT_ID': 'Set' if os.environ.get('GMAIL_CLIENT_ID') else 'Missing',
+            'GMAIL_CLIENT_SECRET': 'Set' if os.environ.get('GMAIL_CLIENT_SECRET') else 'Missing'
+        }
+    })
+
+@app.route('/debug/scheduler')
+def debug_scheduler():
+    """Debug endpoint to check scheduler status with enhanced statistics"""
+    global scheduler_stats
+    
+    # Calculate IST times
+    ist_tz = pytz.timezone('Asia/Kolkata')
+    current_time_ist = datetime.now(ist_tz)
+    
+    next_run_utc = schedule.next_run() if schedule.jobs else None
+    next_run_ist = None
+    if next_run_utc:
+        next_run_ist = next_run_utc.replace(tzinfo=pytz.UTC).astimezone(ist_tz)
+    
+    return jsonify({
+        'scheduler_running': True,
+        'scheduled_jobs': [str(job) for job in schedule.jobs],
+        'next_run_utc': str(next_run_utc) if next_run_utc else None,
+        'next_run_ist': next_run_ist.strftime('%Y-%m-%d %H:%M:%S IST') if next_run_ist else None,
+        'current_time_utc': datetime.now().isoformat(),
+        'current_time_ist': current_time_ist.strftime('%Y-%m-%d %H:%M:%S IST'),
+        'gmail_check_interval': '5 minutes',
+        'last_run_stats': {
+            'last_run_utc': scheduler_stats['last_run'],
+            'last_run_ist': scheduler_stats['last_run_ist'],
+            'users_checked': scheduler_stats['total_users_checked'],
+            'emails_found': scheduler_stats['total_emails_found'],
+            'transactions_found': scheduler_stats['total_transactions_found'],
+            'run_count': scheduler_stats['run_count'],
+            'last_error': scheduler_stats['last_error']
+        },
+        'time_until_next_run': str(next_run_utc - datetime.now()) if next_run_utc else None
+    })
+
+@app.route('/debug/trigger-scheduler')
+def trigger_scheduler():
+    """Manually trigger the Gmail scheduler for testing"""
+    try:
+        print("🔄 Manually triggering Gmail scheduler...")
+        check_all_users_gmail()
+        return jsonify({
+            'success': True,
+            'message': 'Scheduler triggered successfully',
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.route('/user/connections', methods=['POST'])
 def get_user_connections():
     """Get user's email connections"""
     try:
         data = request.get_json()
         user_email = data.get('userEmail')
+        
         if not user_email:
             return jsonify({'error': 'User email required'}), 400
-
+        
+        # Get user data from Firebase
         user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
         user_data = firebase.get_user_data(user_email_key)
-
-        if user_data and 'gmailTokens' in user_data and user_data['gmailTokens'].get('connected'):
+        
+        if not user_data:
+            return jsonify({
+                'connections': {
+                    'gmail': {'connected': False},
+                    'outlook': {'connected': False}
+                }
+            })
+        
+        # Check Gmail connection
+        gmail_connected = 'gmailTokens' in user_data and user_data['gmailTokens'].get('connected', False)
+        gmail_info = {}
+        if gmail_connected:
             gmail_info = {
                 'connected': True,
-                'email': user_email,
+                'email': user_data.get('email', user_email),
+                'connectedAt': user_data['gmailTokens'].get('created_at'),
                 'scope': user_data['gmailTokens'].get('scope', '')
             }
         else:
             gmail_info = {'connected': False}
-
+        
         return jsonify({
             'connections': {
                 'gmail': gmail_info,
                 'outlook': {'connected': False}  # Not implemented yet
             }
         })
+        
     except Exception as e:
         print(f"Get user connections error: {str(e)}")
         return jsonify({'error': 'Failed to get user connections'}), 500
@@ -807,7 +916,7 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                         email_info['date_header'] = value
                 body = extract_email_body(email_info['payload'])
                 email_info['body'] = body  # Always decoded
-                transaction, transaction_log = extract_transaction_from_email(email, return_log=True)
+                transaction = extract_transaction_from_email(email)
                 if transaction:
                     print(f"Email {i+1} has transaction: {transaction.get('amount', 'unknown')} {transaction.get('currency', 'unknown')}")
                     # Remove duplicate params and add decoded body
@@ -836,7 +945,7 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
                     email_info['has_transaction'] = True
                     email_info['transaction_data'] = transaction_clean
                 else:
-                    print(f"Email {i+1} not a transaction: {transaction_log}")
+                    print(f"Email {i+1} has no transaction data")
                     email_info['has_transaction'] = False
                     email_info['transaction_data'] = None
                 all_emails.append(email_info)
@@ -1240,45 +1349,37 @@ def get_gmail_email(access_token, message_id):
         print(f"Get email error: {str(e)}")
         return None
 
-def extract_transaction_from_email(email, return_log=False):
-    """Extract transaction data from email, optionally returning log info"""
+def extract_transaction_from_email(email):
+    """Extract transaction data from email"""
     try:
         payload = email.get('payload', {})
         headers = payload.get('headers', [])
-
+        
         # Get email metadata
         subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
         sender = next((h['value'] for h in headers if h['name'] == 'From'), '')
         date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-
+        
         # Get email body
         body = extract_email_body(payload)
-
+        
         # Extract transaction details
-        transaction, transaction_log = parse_transaction_data(subject, body, sender, date, return_log=True)
-
+        transaction = parse_transaction_data(subject, body, sender, date)
+        
         if transaction:
             transaction['emailId'] = email['id']
             transaction['emailSubject'] = subject
             transaction['emailFrom'] = sender
             transaction['emailDate'] = date
-        if return_log:
-            return transaction, transaction_log
-        else:
-            return transaction
-
+            
+        return transaction
+        
     except Exception as e:
         print(f"Extract transaction error: {str(e)}")
-        if return_log:
-            return None, str(e)
         return None
 
 
 def parse_transaction_data(subject, body, sender, date):
-    """Parse transaction data from email content with robust Indian transaction detection"""
-
-    text = f"{subject} {body}".lower()
-def parse_transaction_data(subject, body, sender, date, return_log=False):
     """Parse transaction data from email content with robust Indian transaction detection"""
 
     text = f"{subject} {body}".lower()
@@ -1337,37 +1438,19 @@ def parse_transaction_data(subject, body, sender, date, return_log=False):
 
     # Transaction identification logic
     is_transaction = False
-    log_reasons = []
     # If amount is found, always consider as transaction
     if amount:
         is_transaction = True
-        log_reasons.append(f"Amount found: {amount} {currency}")
     # If sender is bank and subject/body has transaction keywords, consider as transaction
     elif sender_has_bank and (subject_has_txn or body_has_txn):
         is_transaction = True
-        log_reasons.append(f"Sender has bank keyword: {sender}. Subject/Body has transaction keyword.")
     # If subject and body both have transaction keywords, consider as transaction
     elif subject_has_txn and body_has_txn:
         is_transaction = True
-        log_reasons.append("Subject and body both have transaction keywords.")
-    else:
-        if not amount:
-            log_reasons.append("No amount found.")
-        if not sender_has_bank:
-            log_reasons.append(f"Sender does not have bank keyword: {sender}")
-        if not (subject_has_txn or body_has_txn):
-            log_reasons.append("Neither subject nor body has transaction keyword.")
-        elif not subject_has_txn:
-            log_reasons.append("Subject does not have transaction keyword.")
-        elif not body_has_txn:
-            log_reasons.append("Body does not have transaction keyword.")
 
     if not is_transaction:
-        log_msg = f"Subject: '{subject}', Sender: '{sender}', Body: '{body[:100]}...'. Reasons: {log_reasons}"
-        if return_log:
-            return None, log_msg
         return None
-
+    
     # Extract merchant with enhanced patterns for Indian transactions
     merchant_patterns = [
         # Indian transaction patterns
@@ -1401,6 +1484,10 @@ def parse_transaction_data(subject, body, sender, date, return_log=False):
     account = f"****{card_match.group(1) or card_match.group(2)}" if card_match else 'Unknown'
     
     # ...existing code...
+
+# Background email checking service
+def check_all_users_gmail():
+    """Check Gmail for all users and extract transactions - Enhanced version"""
     global scheduler_stats
     
     try:

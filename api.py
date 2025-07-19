@@ -7,7 +7,6 @@ import requests
 import base64
 import re
 import html
-from bs4 import BeautifulSoup
 from email.utils import parsedate_to_datetime
 from firebase_service import FirebaseService
 from text_processor import TextProcessor
@@ -1387,16 +1386,14 @@ def clean_email_body(raw_body):
         # Remove tracking links like <https://...>
         unescaped = re.sub(r'<https?://[^>]+>', '', unescaped)
 
-        # Strip remaining HTML
-        soup = BeautifulSoup(unescaped, 'html.parser')
-        for tag in soup(['script', 'style', 'head', 'meta', 'title']):
-            tag.decompose()
-        text = soup.get_text(separator=' ')
-
+        # Remove script/style/head/meta/title tags and all HTML tags using regex
+        unescaped = re.sub(r'<(script|style|head|meta|title)[^>]*>.*?</\1>', '', unescaped, flags=re.DOTALL|re.IGNORECASE)
+        # Remove all HTML tags
+        text = re.sub(r'<[^>]+>', '', unescaped)
+        # Remove links
+        text = re.sub(r'https?://\S+', '', text)
         # Remove extra whitespace
-        text = re.sub(r'https?://\S+', '', text)  # Remove links
         text = re.sub(r'\s+', ' ', text).strip()
-
         return text
 
     except Exception as e:

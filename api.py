@@ -71,24 +71,33 @@ def store_user_transaction_in_file(user_email, transaction):
         # Get current transactions
         response = requests.get(transactions_path)
         transactions = []
+        print(f"Getting transactions from: {transactions_path}")
+        print(f"Response status: {response.status_code}")
         if response.ok:
             try:
                 data = response.json()
+                print(f"Response data type: {type(data)}, data: {data}")
             except Exception as e:
                 print(f"Error decoding Firebase response: {str(e)}")
                 data = None
             # If the file is empty or not a list, start with an empty list
             if data is None:
                 transactions = []
+                print("No existing transactions found, starting with empty list")
             elif isinstance(data, list):
-                transactions = data
+                # Filter out None values from the list
+                transactions = [t for t in data if t is not None]
+                print(f"Found {len(transactions)} existing transactions")
             else:
                 transactions = []
+                print(f"Unexpected data format: {type(data)}, starting with empty list")
+        else:
+            print(f"Failed to get transactions: {response.status_code}")
         # If response not ok, transactions remains empty
 
         # Check for duplicate transactions
         transaction_id = transaction.get('id')
-        existing_ids = [t.get('id') for t in transactions]
+        existing_ids = [t.get('id') for t in transactions if t is not None]
         if transaction_id in existing_ids:
             error_reason = "Duplicate transaction ID"
             print(f"Transaction {transaction_id} already exists for user {user_id}, skipping...")
@@ -99,6 +108,8 @@ def store_user_transaction_in_file(user_email, transaction):
         new_date = transaction.get('date', '')[:10]
         new_merchant = transaction.get('merchant', '')
         for existing_tx in transactions:
+            if existing_tx is None:
+                continue
             existing_amount = existing_tx.get('amount')
             existing_date = existing_tx.get('date', '')[:10]
             existing_merchant = existing_tx.get('merchant', '')
@@ -115,16 +126,25 @@ def store_user_transaction_in_file(user_email, transaction):
 
         # Save back to Firebase
         response = requests.put(transactions_path, json=transactions)
-        print(f"Stored new transaction {transaction_id} for user {user_id} in transactions.json")
+        print(f"Attempting to store transaction {transaction_id} for user {user_id}")
+        print(f"PUT response status: {response.status_code}")
         if response.ok:
-            return {"stored": True}
+            print(f"Successfully stored transaction {transaction_id} for user {user_id}")
+            return {"stored": True, "firebase_path": transactions_path, "transaction_id": transaction_id}
         else:
-            error_reason = f"Failed to save to Firebase: {response.status_code}"
-            return {"stored": False, "error": error_reason}
+            error_reason = f"Failed to save to Firebase: {response.status_code} - {response.text}"
+            print(f"Failed to store transaction: {error_reason}")
+            return {"stored": False, "error": error_reason, "firebase_path": transactions_path, "transaction_id": transaction_id}
     except Exception as e:
         error_reason = f"Exception: {str(e)}"
         print(f"Error storing transaction for user {user_email}: {str(e)}")
-        return {"stored": False, "error": error_reason}
+        # Try to include firebase_path and transaction_id if they exist
+        result = {"stored": False, "error": error_reason}
+        if 'user_id' in locals():
+            result["firebase_path"] = f"{firebase.base_url}/{user_id}/transactions.json"
+        if 'transaction_id' in locals():
+            result["transaction_id"] = transaction_id
+        return result
 
 @app.route('/health')
 def health():

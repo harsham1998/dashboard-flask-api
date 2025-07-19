@@ -57,142 +57,33 @@ def home():
         'time': datetime.now().isoformat()
     })
 
-@app.route('/test_api.html')
-def serve_test_api():
-    """Serve the test API HTML interface"""
-    try:
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        test_api_path = os.path.join(current_dir, 'test_api.html')
-        
-        with open(test_api_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        from flask import Response
-        return Response(content, mimetype='text/html')
-        
-    except Exception as e:
-        return jsonify({
-            'error': 'Failed to load test API interface',
-            'message': str(e)
-        }), 500
-
-@app.route('/health')
-def health():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'firebase_connection': 'active'
-    })
-
-@app.route('/debug/env')
-def debug_env():
-    """Debug endpoint to check environment variables"""
-    return jsonify({
-        'gmail_client_id': 'Set' if GMAIL_CONFIG['client_id'] else 'Missing',
-        'gmail_client_secret': 'Set' if GMAIL_CONFIG['client_secret'] else 'Missing',
-        'redirect_uri': GMAIL_CONFIG['redirect_uri'],
-        'environment_variables': {
-            'GMAIL_CLIENT_ID': 'Set' if os.environ.get('GMAIL_CLIENT_ID') else 'Missing',
-            'GMAIL_CLIENT_SECRET': 'Set' if os.environ.get('GMAIL_CLIENT_SECRET') else 'Missing'
-        }
-    })
-
-@app.route('/debug/scheduler')
-def debug_scheduler():
-    """Debug endpoint to check scheduler status with enhanced statistics"""
-    global scheduler_stats
-    
-    # Calculate IST times
-    ist_tz = pytz.timezone('Asia/Kolkata')
-    current_time_ist = datetime.now(ist_tz)
-    
-    next_run_utc = schedule.next_run() if schedule.jobs else None
-    next_run_ist = None
-    if next_run_utc:
-        next_run_ist = next_run_utc.replace(tzinfo=pytz.UTC).astimezone(ist_tz)
-    
-    return jsonify({
-        'scheduler_running': True,
-        'scheduled_jobs': [str(job) for job in schedule.jobs],
-        'next_run_utc': str(next_run_utc) if next_run_utc else None,
-        'next_run_ist': next_run_ist.strftime('%Y-%m-%d %H:%M:%S IST') if next_run_ist else None,
-        'current_time_utc': datetime.now().isoformat(),
-        'current_time_ist': current_time_ist.strftime('%Y-%m-%d %H:%M:%S IST'),
-        'gmail_check_interval': '5 minutes',
-        'last_run_stats': {
-            'last_run_utc': scheduler_stats['last_run'],
-            'last_run_ist': scheduler_stats['last_run_ist'],
-            'users_checked': scheduler_stats['total_users_checked'],
-            'emails_found': scheduler_stats['total_emails_found'],
-            'transactions_found': scheduler_stats['total_transactions_found'],
-            'run_count': scheduler_stats['run_count'],
-            'last_error': scheduler_stats['last_error']
-        },
-        'time_until_next_run': str(next_run_utc - datetime.now()) if next_run_utc else None
-    })
-
-@app.route('/debug/trigger-scheduler')
-def trigger_scheduler():
-    """Manually trigger the Gmail scheduler for testing"""
-    try:
-        print("🔄 Manually triggering Gmail scheduler...")
-        check_all_users_gmail()
-        return jsonify({
-            'success': True,
-            'message': 'Scheduler triggered successfully',
-            'timestamp': datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }), 500
-
 @app.route('/user/connections', methods=['POST'])
 def get_user_connections():
     """Get user's email connections"""
     try:
         data = request.get_json()
         user_email = data.get('userEmail')
-        
         if not user_email:
             return jsonify({'error': 'User email required'}), 400
-        
-        # Get user data from Firebase
+
         user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
         user_data = firebase.get_user_data(user_email_key)
-        
-        if not user_data:
-            return jsonify({
-                'connections': {
-                    'gmail': {'connected': False},
-                    'outlook': {'connected': False}
-                }
-            })
-        
-        # Check Gmail connection
-        gmail_connected = 'gmailTokens' in user_data and user_data['gmailTokens'].get('connected', False)
-        gmail_info = {}
-        if gmail_connected:
+
+        if user_data and 'gmailTokens' in user_data and user_data['gmailTokens'].get('connected'):
             gmail_info = {
                 'connected': True,
-                'email': user_data.get('email', user_email),
-                'connectedAt': user_data['gmailTokens'].get('created_at'),
+                'email': user_email,
                 'scope': user_data['gmailTokens'].get('scope', '')
             }
         else:
             gmail_info = {'connected': False}
-        
+
         return jsonify({
             'connections': {
                 'gmail': gmail_info,
                 'outlook': {'connected': False}  # Not implemented yet
             }
         })
-        
     except Exception as e:
         print(f"Get user connections error: {str(e)}")
         return jsonify({'error': 'Failed to get user connections'}), 500

@@ -59,6 +59,27 @@ def store_user_transaction_in_file(user_email, transaction):
     """Store transaction in user's Firebase {user_id}.json with duplicate checking"""
     error_reason = None
     try:
+        print(f"=== Starting transaction storage ===")
+        print(f"User email: {user_email}")
+        print(f"Transaction type: {type(transaction)}")
+        print(f"Transaction data: {transaction}")
+        
+        # Validate inputs
+        if not user_email:
+            error_reason = "User email is required"
+            print(f"Error: {error_reason}")
+            return {"stored": False, "error": error_reason}
+        
+        if transaction is None:
+            error_reason = "Transaction data is None"
+            print(f"Error: {error_reason}")
+            return {"stored": False, "error": error_reason}
+        
+        if not isinstance(transaction, dict):
+            error_reason = f"Transaction must be a dict, got {type(transaction)}"
+            print(f"Error: {error_reason}")
+            return {"stored": False, "error": error_reason}
+        
         # Find user_id from email by searching users
         user_id = find_user_id_by_email(user_email)
         if not user_id:
@@ -105,13 +126,17 @@ def store_user_transaction_in_file(user_email, transaction):
 
         # Also check by amount, date, and merchant for similar transactions
         new_amount = transaction.get('amount')
-        new_date = transaction.get('date', '')[:10]
+        new_date_raw = transaction.get('date', '')
+        new_date = new_date_raw[:10] if new_date_raw else ''
         new_merchant = transaction.get('merchant', '')
+        print(f"New transaction details - Amount: {new_amount}, Date: {new_date}, Merchant: {new_merchant}")
+        
         for existing_tx in transactions:
             if existing_tx is None:
                 continue
             existing_amount = existing_tx.get('amount')
-            existing_date = existing_tx.get('date', '')[:10]
+            existing_date_raw = existing_tx.get('date', '')
+            existing_date = existing_date_raw[:10] if existing_date_raw else ''
             existing_merchant = existing_tx.get('merchant', '')
             if (existing_amount == new_amount and existing_date == new_date and existing_merchant == new_merchant):
                 error_reason = "Duplicate by amount/date/merchant"
@@ -136,8 +161,15 @@ def store_user_transaction_in_file(user_email, transaction):
             print(f"Failed to store transaction: {error_reason}")
             return {"stored": False, "error": error_reason, "firebase_path": transactions_path, "transaction_id": transaction_id}
     except Exception as e:
+        import traceback
         error_reason = f"Exception: {str(e)}"
+        full_traceback = traceback.format_exc()
+        print(f"=== ERROR OCCURRED ===")
         print(f"Error storing transaction for user {user_email}: {str(e)}")
+        print(f"Full traceback:")
+        print(full_traceback)
+        print(f"=== END ERROR ===")
+        
         # Try to include firebase_path and transaction_id if they exist
         result = {"stored": False, "error": error_reason}
         if 'user_id' in locals():

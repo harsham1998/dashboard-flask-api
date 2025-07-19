@@ -1372,9 +1372,6 @@ def extract_transaction_from_email(email):
         return None, None
 # Helper functions from user
 def clean_email_body(raw_body):
-    """
-    Cleans a raw Gmail email body string with \uXXXX, links, tags, etc.
-    """
     try:
         # Instead of decoding unicode, just replace common unicode escapes manually
         # Replace \u003C and \u003E with < and >

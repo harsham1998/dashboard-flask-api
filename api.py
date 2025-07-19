@@ -1438,19 +1438,35 @@ def parse_transaction_data(subject, body, sender, date):
 
     # Transaction identification logic
     is_transaction = False
+    log_reasons = []
     # If amount is found, always consider as transaction
     if amount:
         is_transaction = True
+        log_reasons.append(f"Amount found: {amount} {currency}")
     # If sender is bank and subject/body has transaction keywords, consider as transaction
     elif sender_has_bank and (subject_has_txn or body_has_txn):
         is_transaction = True
+        log_reasons.append(f"Sender has bank keyword: {sender}. Subject/Body has transaction keyword.")
     # If subject and body both have transaction keywords, consider as transaction
     elif subject_has_txn and body_has_txn:
         is_transaction = True
+        log_reasons.append("Subject and body both have transaction keywords.")
+    else:
+        if not amount:
+            log_reasons.append("No amount found.")
+        if not sender_has_bank:
+            log_reasons.append(f"Sender does not have bank keyword: {sender}")
+        if not (subject_has_txn or body_has_txn):
+            log_reasons.append("Neither subject nor body has transaction keyword.")
+        elif not subject_has_txn:
+            log_reasons.append("Subject does not have transaction keyword.")
+        elif not body_has_txn:
+            log_reasons.append("Body does not have transaction keyword.")
 
     if not is_transaction:
+        print(f"[Transaction Detection] Not a transaction. Subject: '{subject}', Sender: '{sender}', Body: '{body[:100]}...'. Reasons: {log_reasons}")
         return None
-    
+
     # Extract merchant with enhanced patterns for Indian transactions
     merchant_patterns = [
         # Indian transaction patterns

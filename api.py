@@ -1358,12 +1358,26 @@ def extract_transaction_from_email(email):
         transaction = parse_transaction_email(body)
         transaction_log = None
         if transaction and transaction.get('amount'):
-            transaction['emailId'] = email['id']
-            transaction['emailSubject'] = subject
-            transaction['emailFrom'] = sender
-            transaction['emailDate'] = date
+            # Build new transaction object as per requirements
+            ist_tz = pytz.timezone('Asia/Kolkata')
+            now_ist = datetime.now(ist_tz)
+            txn_obj = {
+                'id': email.get('id'),
+                'amount': transaction.get('amount'),
+                'currency': transaction.get('currency', 'INR'),
+                'merchant': transaction.get('merchant'),
+                'type': transaction.get('credit_or_debit'),
+                'reference_number': transaction.get('reference_number'),
+                'email_id': email.get('id'),
+                'email_subject': subject,
+                'email_from': sender,
+                'email_ist_date': now_ist.strftime('%Y-%m-%d %H:%M:%S IST'),
+                'gmail_source': email.get('gmail_source'),
+                'dashboard_user_email': email.get('dashboard_user_email'),
+                'description': body
+            }
             transaction_log = 'Transaction detected.'
-            return transaction, transaction_log
+            return txn_obj, transaction_log
         else:
             transaction_log = 'No transaction detected or amount missing.'
             return None, transaction_log
@@ -1415,8 +1429,7 @@ def parse_transaction_email(text):
             "date": None,
             "reference_number": None,
             "card_info": None,
-            "currency": "INR",
-            "description": text[:300]
+            "currency": "INR"
         }
 
         # Amount

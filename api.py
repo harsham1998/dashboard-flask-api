@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 from datetime import datetime
@@ -13,8 +14,17 @@ from text_processor import TextProcessor
 import threading
 import schedule
 
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
+
+# Gmail OAuth Configuration
+GMAIL_CONFIG = {
+    'client_id': os.environ.get('GMAIL_CLIENT_ID'),
+    'client_secret': os.environ.get('GMAIL_CLIENT_SECRET'),
+    'redirect_uri': 'https://dashboard-flask-api.onrender.com/oauth/gmail/callback',
+    'scope': 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email'
+}
 
 # Initialize services
 firebase = FirebaseService()
@@ -31,52 +41,73 @@ scheduler_stats = {
     'run_count': 0
 }
 
-# Gmail OAuth Configuration
-import os
-GMAIL_CONFIG = {
-    'client_id': os.environ.get('GMAIL_CLIENT_ID'),
-    'client_secret': os.environ.get('GMAIL_CLIENT_SECRET'),
-    'redirect_uri': 'https://dashboard-flask-api.onrender.com/oauth/gmail/callback',
-    'scope': 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email'
-}
-
-@app.route('/')
-def home():
-    """Root endpoint with API information"""
-    return jsonify({
-        'status': 'Dashboard Flask API Server Running',
-        'version': '1.0.0',
-        'endpoints': {
-            'GET /tasks': 'Get all tasks',
-            'POST /tasks': 'Add new task',
-            'GET /tasks/<date>': 'Get tasks for specific date',
-            'GET /siri/add-task': 'Add task via Siri (text query param)',
-            'GET /siri/addTransaction': 'Add transaction via Siri (message param)',
-            'GET /transactions': 'Get recent transactions',
-            'GET /test_api.html': 'API Testing Interface'
-        },
-        'time': datetime.now().isoformat()
-    })
-
-@app.route('/test_api.html')
-def serve_test_api():
-    """Serve the test API HTML interface"""
+def find_user_id_by_email(email):
+    """Find user ID by email from users.json"""
     try:
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        test_api_path = os.path.join(current_dir, 'test_api.html')
-        
-        with open(test_api_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        from flask import Response
-        return Response(content, mimetype='text/html')
-        
+        response = requests.get(f"{firebase.base_url}/users.json")
+        if response.ok:
+            users = response.json() or {}
+            for user_id, user_data in users.items():
+                if user_data.get('email') == email:
+                    return user_id
+        return None
     except Exception as e:
-        return jsonify({
-            'error': 'Failed to load test API interface',
-            'message': str(e)
-        }), 500
+        print(f"Error finding user ID for email {email}: {str(e)}")
+        return None
+
+def store_user_transaction_in_file(user_email, transaction):
+    """Store transaction in user's Firebase {user_id}.json with duplicate checking"""
+    try:
+        # Find user_id from email by searching users
+        user_id = find_user_id_by_email(user_email)
+        if not user_id:
+            print(f"User ID not found for email: {user_email}")
+            return False
+            
+        transaction['user_id'] = user_id
+        user_file_path = f"{firebase.base_url}/{user_id}.json"
+        response = requests.get(user_file_path)
+        if response.ok:
+            user_data = response.json() or {}
+        else:
+            user_data = {}
+
+        # Initialize transactions array if not exists
+        if 'transactions' not in user_data:
+            user_data['transactions'] = []
+
+        # Check for duplicate transactions
+        transaction_id = transaction.get('id')
+        existing_ids = [t.get('id') for t in user_data['transactions']]
+        if transaction_id in existing_ids:
+            print(f"Transaction {transaction_id} already exists for user {user_id}, skipping...")
+            return False
+
+        # Also check by amount, date, and merchant for similar transactions
+        new_amount = transaction.get('amount')
+        new_date = transaction.get('date', '')[:10]
+        new_merchant = transaction.get('merchant', '')
+        for existing_tx in user_data['transactions']:
+            existing_amount = existing_tx.get('amount')
+            existing_date = existing_tx.get('date', '')[:10]
+            existing_merchant = existing_tx.get('merchant', '')
+            if (existing_amount == new_amount and existing_date == new_date and existing_merchant == new_merchant):
+                print(f"Duplicate transaction detected for user {user_id}, skipping...")
+                return False
+
+        # Add new transaction to beginning of list
+        user_data['transactions'].insert(0, transaction)
+        # Keep only last 50 transactions
+        if len(user_data['transactions']) > 50:
+            user_data['transactions'] = user_data['transactions'][:50]
+
+        # Save back to Firebase
+        response = requests.put(user_file_path, json=user_data)
+        print(f"Stored new transaction {transaction_id} for user {user_id}")
+        return response.ok
+    except Exception as e:
+        print(f"Error storing transaction for user {user_email}: {str(e)}")
+        return False
 
 @app.route('/health')
 def health():
@@ -162,9 +193,17 @@ def get_user_connections():
         if not user_email:
             return jsonify({'error': 'User email required'}), 400
         
-        # Get user data from Firebase
-        user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
-        user_data = firebase.get_user_data(user_email_key)
+        # Find user ID and get user data from Firebase
+        user_id = find_user_id_by_email(user_email)
+        if not user_id:
+            return jsonify({
+                'connections': {
+                    'gmail': {'connected': False},
+                    'outlook': {'connected': False}
+                }
+            })
+        
+        user_data = firebase.get_user_data(user_id)
         
         if not user_data:
             return jsonify({
@@ -568,10 +607,34 @@ def gmail_oauth_callback():
         # Store tokens directly in Firebase
         if state:  # state contains user email
             try:
-                user_email_key = state.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
+                # Find user ID by email
+                user_id = find_user_id_by_email(state)
+                if not user_id:
+                    return '''
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <title>Gmail Authentication</title>
+                            <style>
+                                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                                .container { max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                                .error { color: #e74c3c; font-size: 48px; margin-bottom: 20px; }
+                                h1 { color: #333; margin-bottom: 10px; }
+                                p { color: #666; }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="container">
+                                <div class="error">❌</div>
+                                <h1>User Not Found</h1>
+                                <p>No user account found for this email. Please sign up first.</p>
+                            </div>
+                        </body>
+                        </html>
+                        '''
                 
-                # Get existing user data or create new user
-                user_data = firebase.get_user_data(user_email_key)
+                # Get existing user data
+                user_data = firebase.get_user_data(user_id)
                 
                 if not user_data:
                     # Create new user data
@@ -597,7 +660,7 @@ def gmail_oauth_callback():
                 }
                 
                 # Save back to Firebase using Firebase service
-                success = firebase.update_user_data(user_email_key, user_data)
+                success = firebase.update_user_data(user_id, user_data)
                 
                 if success:
                     print(f'Gmail tokens stored for user: {state}')
@@ -753,8 +816,10 @@ def refresh_gmail_token_get():
             return jsonify({'error': 'User email required. Use ?userEmail=your@email.com'}), 400
         
         # Get user's current tokens from Firebase
-        user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
-        user_data = firebase.get_user_data(user_email_key)
+        user_id = find_user_id_by_email(user_email)
+        if not user_id:
+            return jsonify({'error': 'User not found'}), 400
+        user_data = firebase.get_user_data(user_id)
         
         if not user_data or 'gmailTokens' not in user_data:
             return jsonify({'error': 'No Gmail tokens found for this user'}), 400
@@ -801,7 +866,7 @@ def refresh_gmail_token_get():
         gmail_tokens['last_refreshed'] = datetime.now().isoformat()
         
         user_data['gmailTokens'] = gmail_tokens
-        firebase.update_user_data(user_email_key, user_data)
+        firebase.update_user_data(user_id, user_data)
         
         print(f"Updated tokens in Firebase for user: {user_email}")
         
@@ -1126,8 +1191,7 @@ def validate_and_refresh_token(user_email, user_data):
             tokens['last_refreshed'] = datetime.now().isoformat()
             
             user_data['gmailTokens'] = tokens
-            user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
-            firebase.update_user_data(user_email_key, user_data)
+            firebase.update_user_data(user_id, user_data)
             
             print(f"Token refreshed successfully for {user_email}")
             return tokens, None
@@ -1152,8 +1216,10 @@ def check_gmail_now():
             return jsonify({'error': 'Minutes must be between 1 and 1440 (24 hours)'}), 400
         
         # Get user's Gmail tokens from Firebase
-        user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
-        user_data = firebase.get_user_data(user_email_key)
+        user_id = find_user_id_by_email(user_email)
+        if not user_id:
+            return jsonify({'error': 'User not found'}), 400
+        user_data = firebase.get_user_data(user_id)
         
         if not user_data or 'gmailTokens' not in user_data:
             return jsonify({'error': 'No Gmail tokens found'}), 400
@@ -1195,7 +1261,7 @@ def check_gmail_now():
         current_time_ist = datetime.now(ist_tz)
         tokens['last_email_check'] = current_time_ist.isoformat()
         user_data['gmailTokens'] = tokens
-        firebase.update_user_data(user_email_key, user_data)
+        firebase.update_user_data(user_id, user_data)
         
         # Ensure transactions reflect the latest schema (removal/addition of fields)
         transactions_cleaned = []
@@ -1258,8 +1324,10 @@ def get_gmail_transactions():
             return jsonify({'error': 'User email required'}), 400
         
         # Get user's Gmail tokens from Firebase
-        user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
-        user_data = firebase.get_user_data(user_email_key)
+        user_id = find_user_id_by_email(user_email)
+        if not user_id:
+            return jsonify({'error': 'User not found'}), 400
+        user_data = firebase.get_user_data(user_id)
         
         if not user_data or 'gmailTokens' not in user_data:
             return jsonify({'error': 'No Gmail tokens found'}), 400
@@ -1788,66 +1856,6 @@ def get_gmail_transactions_for_user(gmail_tokens, user_email, last_check, minute
         print(f"Error getting Gmail transactions for {user_email}: {str(e)}")
         return []
 
-def store_user_transaction_in_file(user_email, transaction):
-    """Store transaction in user's individual JSON file with duplicate checking"""
-    try:
-        # Create safe filename from email
-        safe_email = user_email.replace('@', '_at_').replace('.', '_dot_')
-        filename = f"{safe_email}.json"
-        
-        # Get existing transactions from user's file
-        response = requests.get(f"{firebase.base_url}/{filename}")
-        
-        if response.ok:
-            user_data = response.json() or {}
-        else:
-            user_data = {}
-        
-        # Initialize transactions array if not exists
-        if 'transactions' not in user_data:
-            user_data['transactions'] = []
-        
-        # Check for duplicate transactions
-        transaction_id = transaction.get('id')
-        existing_ids = [t.get('id') for t in user_data['transactions']]
-        
-        if transaction_id in existing_ids:
-            print(f"Transaction {transaction_id} already exists for user {user_email}, skipping...")
-            return False
-        
-        # Also check by amount, date, and merchant for similar transactions
-        new_amount = transaction.get('amount')
-        new_date = transaction.get('date', '')[:10]  # Just the date part
-        new_merchant = transaction.get('merchant', '')
-        
-        for existing_tx in user_data['transactions']:
-            existing_amount = existing_tx.get('amount')
-            existing_date = existing_tx.get('date', '')[:10]
-            existing_merchant = existing_tx.get('merchant', '')
-            
-            # Check if it's the same transaction (same amount, date, merchant)
-            if (existing_amount == new_amount and 
-                existing_date == new_date and 
-                existing_merchant == new_merchant):
-                print(f"Similar transaction found for user {user_email}, skipping duplicate...")
-                return False
-        
-        # Add new transaction to beginning of list
-        user_data['transactions'].insert(0, transaction)
-        
-        # Keep only last 50 transactions
-        if len(user_data['transactions']) > 50:
-            user_data['transactions'] = user_data['transactions'][:50]
-        
-        # Save back to Firebase
-        response = requests.put(f"{firebase.base_url}/{filename}", json=user_data)
-        
-        print(f"Stored new transaction {transaction_id} for user {user_email}")
-        return response.ok
-        
-    except Exception as e:
-        print(f"Error storing transaction for user {user_email}: {str(e)}")
-        return False
 
 def store_user_transaction(user_key, transaction):
     """Store transaction in user's Firebase transactions (legacy method)"""

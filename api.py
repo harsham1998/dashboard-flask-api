@@ -1460,7 +1460,10 @@ def parse_transaction_email(text):
             "date": None,
             "reference_number": None,
             "card_info": None,
-            "currency": "INR"
+            "currency": "INR",
+            "category": None,
+            "mode": None,
+            "application": None
         }
 
         # Amount
@@ -1482,10 +1485,77 @@ def parse_transaction_email(text):
         elif 'neft' in text_lower or 'imps' in text_lower:
             result['transaction_type'] = 'bank_transfer'
 
-        # Merchant
-        merchant_match = re.search(r'to\s+([a-z0-9@.\s&-]+?)\s+(?:on|for)', text_lower)
+        # Merchant (improved extraction)
+        merchant_match = re.search(r'(?:merchant[:*]?|paid to|payment to|to)\s*([A-Za-z0-9@.\s&-]+?)(?:\s+on|\s+for|\s+date|\s+time|\s+amount|\.|,|$)', text, re.IGNORECASE)
         if merchant_match:
             result['merchant'] = merchant_match.group(1).strip()
+        else:
+            # Try to extract from lines containing 'merchant'
+            merchant_line = next((line for line in text.splitlines() if 'merchant' in line.lower()), None)
+            if merchant_line:
+                m = re.search(r'merchant[:*]?\s*([A-Za-z0-9@.\s&-]+)', merchant_line, re.IGNORECASE)
+                if m:
+                    result['merchant'] = m.group(1).strip()
+        # Type (debit/credit)
+        if 'debited' in text_lower or 'payment' in text_lower or 'spent' in text_lower or 'used to make a payment' in text_lower:
+            result['credit_or_debit'] = 'debit'
+        elif 'credited' in text_lower or 'received' in text_lower:
+            result['credit_or_debit'] = 'credit'
+        # Category (basic mapping by merchant keywords)
+        merchant = result.get('merchant', '').lower() if result.get('merchant') else ''
+        category_map = {
+            'amazon': 'shopping',
+            'flipkart': 'shopping',
+            'bigbasket': 'grocery',
+            'grofers': 'grocery',
+            'dmart': 'grocery',
+            'swiggy': 'food',
+            'zomato': 'food',
+            'paytm': 'p2p',
+            'phonepe': 'p2p',
+            'googlepay': 'p2p',
+            'mobikwik': 'p2p',
+            'freecharge': 'p2p',
+            'irctc': 'travel',
+            'onecard': 'card_payment',
+            'tatanu': 'card_payment',
+            'sbi': 'bank_transfer',
+            'icici': 'bank_transfer',
+            'hdfc': 'bank_transfer',
+            'axis': 'bank_transfer',
+            'kotak': 'bank_transfer',
+            'pnb': 'bank_transfer',
+            'canara': 'bank_transfer',
+            'union': 'bank_transfer',
+        }
+        for key, cat in category_map.items():
+            if key in merchant:
+                result['category'] = cat
+                break
+        if not result['category']:
+            result['category'] = 'other'
+        # Mode (Card, UPI, Bank transfer)
+        if 'upi' in text_lower:
+            result['mode'] = 'UPI'
+        elif 'card' in text_lower:
+            result['mode'] = 'Card'
+        elif 'neft' in text_lower or 'imps' in text_lower or 'rtgs' in text_lower:
+            result['mode'] = 'Bank transfer'
+        else:
+            result['mode'] = 'Other'
+        # Application (UPI app name, Card name, fallback to card number)
+        app_patterns = [
+            r'(onecard|tatanu|paytm|phonepe|googlepay|amazonpay|mobikwik|freecharge)',
+            r'card ending in\s*(\d{4})',
+        ]
+        app_match = None
+        for pat in app_patterns:
+            app_match = re.search(pat, text_lower)
+            if app_match:
+                result['application'] = app_match.group(1) if app_match.lastindex >= 1 else app_match.group(0)
+                break
+        if not result['application'] and result.get('card_info'):
+            result['application'] = result['card_info']
 
         # Bank
         banks = ['hdfc', 'icici', 'sbi', 'axis', 'kotak', 'pnb', 'canara', 'union', 'bob', 'yes bank']

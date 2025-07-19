@@ -743,6 +743,80 @@ def refresh_gmail_token():
         print(f"Token refresh error: {str(e)}")
         return jsonify({'error': 'Failed to refresh token'}), 500
 
+@app.route('/gmail/refresh')
+def refresh_gmail_token_get():
+    """Refresh Gmail access token via GET with userEmail parameter"""
+    try:
+        user_email = request.args.get('userEmail')
+        if not user_email:
+            return jsonify({'error': 'User email required. Use ?userEmail=your@email.com'}), 400
+        
+        # Get user's current tokens from Firebase
+        user_email_key = user_email.replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
+        user_data = firebase.get_user_data(user_email_key)
+        
+        if not user_data or 'gmailTokens' not in user_data:
+            return jsonify({'error': 'No Gmail tokens found for this user'}), 400
+        
+        gmail_tokens = user_data['gmailTokens']
+        refresh_token = gmail_tokens.get('refresh_token')
+        
+        if not refresh_token:
+            return jsonify({'error': 'No refresh token found'}), 400
+        
+        print(f"Refreshing Gmail token for user: {user_email}")
+        
+        # Refresh token with Google
+        token_data = {
+            'client_id': GMAIL_CONFIG['client_id'],
+            'client_secret': GMAIL_CONFIG['client_secret'],
+            'refresh_token': refresh_token,
+            'grant_type': 'refresh_token'
+        }
+        
+        response = requests.post(
+            'https://oauth2.googleapis.com/token',
+            data=token_data
+        )
+        
+        print(f"Google token refresh response: {response.status_code}")
+        
+        if not response.ok:
+            return jsonify({
+                'error': 'Token refresh failed',
+                'status_code': response.status_code,
+                'response': response.text
+            }), 400
+        
+        new_tokens = response.json()
+        
+        if 'error' in new_tokens:
+            return jsonify({'error': new_tokens['error']}), 400
+        
+        # Update tokens in Firebase
+        gmail_tokens['access_token'] = new_tokens['access_token']
+        gmail_tokens['token_type'] = new_tokens.get('token_type', 'Bearer')
+        gmail_tokens['expires_in'] = new_tokens.get('expires_in', 3600)
+        gmail_tokens['last_refreshed'] = datetime.now().isoformat()
+        
+        user_data['gmailTokens'] = gmail_tokens
+        firebase.update_user_data(user_email_key, user_data)
+        
+        print(f"Updated tokens in Firebase for user: {user_email}")
+        
+        return jsonify({
+            'success': True,
+            'user_email': user_email,
+            'new_access_token': new_tokens['access_token'],
+            'expires_in': new_tokens.get('expires_in', 3600),
+            'updated_in_firebase': True,
+            'message': 'Token refreshed and updated in Firebase successfully'
+        })
+        
+    except Exception as e:
+        print(f"Token refresh error: {str(e)}")
+        return jsonify({'error': f'Failed to refresh token: {str(e)}'}), 500
+
 def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
     """Get all emails with details and identified transactions for a specific user"""
     try:

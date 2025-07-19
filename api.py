@@ -1197,6 +1197,28 @@ def check_gmail_now():
         user_data['gmailTokens'] = tokens
         firebase.update_user_data(user_email_key, user_data)
         
+        # Ensure transactions reflect the latest schema (removal/addition of fields)
+        transactions_cleaned = []
+        for txn in result['transactions']:
+            cleaned_txn = {
+                'id': txn.get('id'),
+                'amount': txn.get('amount'),
+                'currency': txn.get('currency'),
+                'date': txn.get('date'),
+                'merchant': txn.get('merchant'),
+                'type': txn.get('type'),
+                'reference_number': txn.get('reference_number'),
+                'email_id': txn.get('email_id'),
+                'email_subject': txn.get('email_subject'),
+                'email_from': txn.get('email_from'),
+                'email_ist_date': txn.get('email_ist_date'),
+                'gmail_source': txn.get('gmail_source'),
+                'dashboard_user_email': txn.get('dashboard_user_email'),
+                'description': txn.get('description'),
+                # Add any other required fields, remove unwanted ones
+            }
+            transactions_cleaned.append(cleaned_txn)
+
         return jsonify({
             'success': True,
             'gmail_account': user_email,
@@ -1207,7 +1229,7 @@ def check_gmail_now():
             'transactions_found': result['total_transactions'],
             'transactions_stored': stored_count,
             'gmail_messages': result['emails'],  # Show actual Gmail messages
-            'transactions': result['transactions'],
+            'transactions': transactions_cleaned,
             'message': f'Checked last {minutes} minutes of Gmail ({user_email}). Found {result["total_emails"]} emails with {result["total_transactions"]} transactions. Stored in {storage_user_email} file.',
             'error': result.get('error'),
             'user_mapping': {
@@ -1419,6 +1441,17 @@ def parse_transaction_email(text):
     """
     try:
         text_lower = text.lower()
+
+        # Transaction keywords for identification
+        keywords = [
+            "debited", "credited", "transaction", "payment of", "paid to", "purchased at",
+            "withdrawn", "spent", "credited to your account", "upi reference", "imps", "neft",
+            "rtgs", "pos", "transfer of", "card ending", "your account has been debited"
+        ]
+
+        # Only proceed if at least one keyword is present
+        if not any(k in text_lower for k in keywords):
+            return None
 
         result = {
             "amount": None,

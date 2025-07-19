@@ -15,9 +15,6 @@ import schedule
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
 # Initialize services
 firebase = FirebaseService()
 text_processor = TextProcessor()
@@ -1388,18 +1385,18 @@ def parse_transaction_data(subject, body, sender, date):
     
     # Enhanced amount patterns for Indian transactions (INR, Rs., etc.)
     amount_patterns = [
-        # Indian currency patterns
-        r'rs\.?\s*([0-9,]+\.?\d{0,2})',  # Rs. 500 or Rs 500.00
+        # Indian currency patterns (more robust for Rs)
+        r'rs[\.\s]*([0-9,]+\.?\d{0,2})',  # Rs.2000.00, Rs 2000.00, Rs2000.00
         r'inr\s*([0-9,]+\.?\d{0,2})',   # INR 500.00
         r'₹\s*([0-9,]+\.?\d{0,2})',     # ₹500.00
-        r'amount:?\s*rs\.?\s*([0-9,]+\.?\d{0,2})',  # Amount: Rs. 500
-        r'credited.*?rs\.?\s*([0-9,]+\.?\d{0,2})',  # credited Rs. 500
-        r'debited.*?rs\.?\s*([0-9,]+\.?\d{0,2})',   # debited Rs. 500
-        r'paid.*?rs\.?\s*([0-9,]+\.?\d{0,2})',      # paid Rs. 500
-        r'charged.*?rs\.?\s*([0-9,]+\.?\d{0,2})',   # charged Rs. 500
-        r'received.*?rs\.?\s*([0-9,]+\.?\d{0,2})',  # received Rs. 500
-        r'transfer.*?rs\.?\s*([0-9,]+\.?\d{0,2})',  # transfer Rs. 500
-        r'upi.*?rs\.?\s*([0-9,]+\.?\d{0,2})',       # UPI Rs. 500
+        r'amount:?\s*rs[\.\s]*([0-9,]+\.?\d{0,2})',  # Amount: Rs. 500
+        r'credited.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',  # credited Rs. 500
+        r'debited.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',   # debited Rs. 500
+        r'paid.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',      # paid Rs. 500
+        r'charged.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',   # charged Rs. 500
+        r'received.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',  # received Rs. 500
+        r'transfer.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',  # transfer Rs. 500
+        r'upi.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',       # UPI Rs. 500
         # US dollar patterns (fallback)
         r'\$([0-9,]+\.?\d{0,2})',
         r'amount:?\s*\$?([0-9,]+\.?\d{0,2})',

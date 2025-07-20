@@ -30,18 +30,22 @@ def ml_parse_transaction_email(text):
         extractor = initialize_ml_system()
         transaction_data = extractor.extract_transaction_details(text)
         
-        # Convert ML output to match original API format
+        # Convert ML output to match original API format with ALL fields
         result = {
             'amount': transaction_data.get('amount'),
-            'currency': 'INR',  # Default currency
+            'currency': transaction_data.get('currency', 'INR'),
             'merchant': transaction_data.get('merchant'),
-            'credit_or_debit': transaction_data.get('transaction_type', 'debit'),
-            'reference_number': None,  # Not extracted by ML yet
+            'credit_or_debit': transaction_data.get('credit_or_debit', 'debit'),
+            'reference_number': transaction_data.get('reference_number'),
             'date': transaction_data.get('date'),
             'card_last_four': transaction_data.get('card_last_four'),
             'category': transaction_data.get('category'),
             'description': transaction_data.get('description'),
-            'confidence': transaction_data.get('raw_confidence', 0.0)
+            'confidence': transaction_data.get('raw_confidence', 0.0),
+            'mode': transaction_data.get('mode'),
+            'from_account': transaction_data.get('from_account'),
+            'account_number': transaction_data.get('account_number'),
+            'available_balance': transaction_data.get('available_balance')
         }
         
         return result

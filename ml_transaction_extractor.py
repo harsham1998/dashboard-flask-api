@@ -104,13 +104,15 @@ class MLTransactionExtractor:
             'credit_or_debit': self._extract_credit_or_debit(doc, email_body),
             'mode': self._extract_mode(doc, email_body),
             'card_last_four': self._extract_card_details(doc, email_body),
+            'account_number': self._extract_account_number(doc, email_body),
             'merchant': self._extract_merchant(doc, email_body),
             'date': self._extract_date(doc, email_body),
             'reference_number': self._extract_reference_number(doc, email_body),
             'category': self._extract_category(doc, email_body),
             'from_account': self._extract_from_account(doc, email_body),
             'currency': self._extract_currency(doc, email_body),
-            'description': self._extract_description(doc, email_body)
+            'description': self._extract_description(doc, email_body),
+            'available_balance': self._extract_available_balance(doc, email_body)
         }
         
         return transaction_data
@@ -216,6 +218,8 @@ class MLTransactionExtractor:
         """Extract transaction date using NLP"""
         # Enhanced date patterns including Indian formats
         date_patterns = [
+            r'on\s+(\d{1,2}-\d{1,2}-\d{4})',  # Format: on 20-07-2025
+            r'(\d{1,2}-\d{1,2}-\d{4})',      # Direct format: 20-07-2025
             r'on\s+(\d{1,2}-\d{1,2}-\d{2})',  # Indian format: 01-07-25
             r'(\d{1,2}-\d{1,2}-\d{2})',      # Direct format: 01-07-25
             r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
@@ -241,15 +245,16 @@ class MLTransactionExtractor:
             try:
                 # Try various date formats including Indian
                 formats = [
+                    '%d-%m-%Y',    # 20-07-2025 (convert to DD-MM-YY)
                     '%d-%m-%y',    # 01-07-25
-                    '%d-%m-%Y',    # 01-07-2025
                     '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d', '%Y-%m-%d', 
                     '%B %d, %Y', '%b %d, %Y'
                 ]
                 for fmt in formats:
                     try:
                         parsed_date = datetime.strptime(date_str, fmt)
-                        return parsed_date.strftime('%d-%m-%y') if fmt == '%d-%m-%y' else parsed_date.strftime('%Y-%m-%d')
+                        # Always return DD-MM-YY format
+                        return parsed_date.strftime('%d-%m-%y')
                     except ValueError:
                         continue
             except:
@@ -303,7 +308,7 @@ class MLTransactionExtractor:
             'groceries': ['grocery', 'supermarket', 'safeway', 'kroger', 'whole foods'],
             'entertainment': ['movie', 'netflix', 'spotify', 'theater', 'cinema'],
             'transportation': ['uber', 'lyft', 'taxi', 'bus', 'metro', 'parking'],
-            'utilities': ['electric', 'water', 'internet', 'phone', 'utility'],
+            'utilities': ['electric', 'water', 'internet', 'phone', 'utility', 'innovative', 'telecom', 'broadband'],
             'healthcare': ['hospital', 'doctor', 'pharmacy', 'medical', 'health']
         }
         
@@ -317,7 +322,11 @@ class MLTransactionExtractor:
         """Extract main transaction description sentence"""
         # Look for main transaction sentence patterns
         desc_patterns = [
-            # Indian bank transaction patterns - capture full sentence including reference number
+            # Credit card transaction patterns
+            r'(Thank you for using your credit card.*?available limit is now.*?\.)',
+            r'(Thank you for using your credit card.*?on\s+\d{2}-\d{2}-\d{4}.*?IST\.)',
+            
+            # UPI and debit patterns
             r'(Rs\.?\d+\.?\d*\s+has\s+been\s+(?:debited|credited).*?reference\s+number\s+is\s+\d+)',
             r'(Rs\.?\d+\.?\d*\s+has\s+been\s+(?:debited|credited).*?on\s+\d{2}-\d{2}-\d{2})',
             r'(UPI transaction.*?reference\s+number\s+is\s+\d+)',
@@ -349,10 +358,23 @@ class MLTransactionExtractor:
     def _extract_credit_or_debit(self, doc, text: str) -> str:
         """Extract whether transaction is credit or debit"""
         text_lower = text.lower()
+        
+        # Explicit debit keywords
         if 'debited' in text_lower or 'debit' in text_lower:
             return 'debit'
-        elif 'credited' in text_lower or 'credit' in text_lower:
+        
+        # Explicit credit keywords
+        elif 'credited' in text_lower or 'received' in text_lower:
             return 'credit'
+        
+        # Credit card usage is always debit (money going out)
+        elif 'using your credit card' in text_lower or 'credit card no.' in text_lower:
+            return 'debit'
+        
+        # Purchase/payment patterns indicate debit
+        elif any(word in text_lower for word in ['thank you for using', 'purchase', 'payment', 'charged', 'spent']):
+            return 'debit'
+        
         return 'debit'  # Default for most transactions
     
     def _extract_mode(self, doc, text: str) -> str:
@@ -419,6 +441,43 @@ class MLTransactionExtractor:
         elif '£' in text or 'gbp' in text_lower:
             return 'GBP'
         return 'INR'  # Default for Indian transactions
+    
+    def _extract_account_number(self, doc, text: str) -> Optional[str]:
+        """Extract account number from transaction"""
+        account_patterns = [
+            r'account\s+(?:no\.?|number)\s+(?:XX)?(\d{4,})',
+            r'a/c\s+(?:XX)?(\d{4,})',
+            r'account\s+ending\s+(?:in\s+)?(\d{4})',
+            r'from\s+.*?account\s+(\d{4,})',
+            r'savings\s+account\s+(\d{4,})',
+            r'current\s+account\s+(\d{4,})'
+        ]
+        
+        for pattern in account_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return None
+    
+    def _extract_available_balance(self, doc, text: str) -> Optional[str]:
+        """Extract available balance from transaction"""
+        balance_patterns = [
+            r'available\s+(?:limit|balance)\s+is\s+now\s+(?:INR|Rs\.?)\s*([\d,]+\.?\d*)',
+            r'available\s+(?:limit|balance):\s*(?:INR|Rs\.?)\s*([\d,]+\.?\d*)',
+            r'balance:\s*(?:INR|Rs\.?)\s*([\d,]+\.?\d*)',
+            r'available\s+balance\s+(?:INR|Rs\.?)\s*([\d,]+\.?\d*)'
+        ]
+        
+        for pattern in balance_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                balance_str = match.group(1).replace(',', '')
+                try:
+                    balance = float(balance_str)
+                    return f"INR {balance:,.2f}"
+                except ValueError:
+                    continue
+        return None
     
     def encrypt_transaction(self, transaction_data: Dict) -> str:
         """Encrypt transaction data for storage"""

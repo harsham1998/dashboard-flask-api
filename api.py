@@ -11,6 +11,7 @@ import html
 from email.utils import parsedate_to_datetime
 from firebase_service import FirebaseService
 from text_processor import TextProcessor
+from ml_integration import ml_parse_transaction_email
 import threading
 import schedule
 
@@ -2090,7 +2091,7 @@ def extract_transaction_from_email(email):
         date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
         body = extract_email_body(payload)
         # Use your parsing function
-        transaction = parse_transaction_email(body)
+        transaction = ml_parse_transaction_email(body)
         transaction_log = None
         if transaction and transaction.get('amount'):
             # Build new transaction object as per requirements

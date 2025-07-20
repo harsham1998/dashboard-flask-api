@@ -237,6 +237,32 @@
                 </div>
             </div>
             
+            <!-- ML Testing -->
+            <div class="test-card">
+                <h2>🤖 ML Transaction Extraction</h2>
+                
+                <div class="form-group">
+                    <label>Email/Transaction Text:</label>
+                    <textarea id="ml-text" rows="6" placeholder="Your card ending in 1234 was charged $45.67 at Starbucks Coffee on March 15, 2024...">Your card ending in 1234 was charged $45.67 at Starbucks Coffee on March 15, 2024. Transaction ID: TXN123456789</textarea>
+                </div>
+                
+                <button class="btn" onclick="testMLExtraction()">🧠 Extract with ML</button>
+                <button class="btn" onclick="testMLWithEncryption()">🔐 Extract + Encrypt</button>
+                <button class="btn" onclick="testMLStats()">📊 ML System Stats</button>
+                
+                <div class="form-group" style="margin-top: 15px;">
+                    <label>Sample Transactions:</label>
+                    <button class="btn btn-danger" onclick="loadMLSampleStarbucks()">Starbucks</button>
+                    <button class="btn btn-danger" onclick="loadMLSampleUPI()">UPI Transfer</button>
+                    <button class="btn btn-danger" onclick="loadMLSampleGas()">Gas Station</button>
+                    <button class="btn btn-danger" onclick="loadMLSampleAmazon()">Amazon Purchase</button>
+                </div>
+                
+                <div class="url-display" id="ml-confidence-display">
+                    ML Confidence: Will show after extraction
+                </div>
+            </div>
+            
             <!-- Debug Testing -->
             <div class="test-card">
                 <h2>🔍 Debug Testing</h2>
@@ -458,6 +484,112 @@
             
             const url = `${getServerUrl()}/oauth/gmail/callback?state=${encodeURIComponent(state)}&code=${encodeURIComponent(code)}`;
             await makeRequest(url);
+        }
+        
+        // ML Testing Functions
+        async function testMLExtraction() {
+            const text = document.getElementById('ml-text').value;
+            
+            if (!text) {
+                updateResponse('Transaction text is required', true);
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${getServerUrl()}/ml/extract`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        email_body: text
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Update confidence display
+                if (data.extracted_data && data.extracted_data.raw_confidence !== undefined) {
+                    const confidence = (data.extracted_data.raw_confidence * 100).toFixed(1);
+                    document.getElementById('ml-confidence-display').textContent = 
+                        `ML Confidence: ${confidence}% | Amount: ${data.extracted_data.amount || 'N/A'} | Merchant: ${data.extracted_data.merchant || 'N/A'}`;
+                }
+                
+                const result = {
+                    status: response.status,
+                    statusText: response.statusText,
+                    url: `${getServerUrl()}/ml/extract`,
+                    data: data
+                };
+                
+                updateResponse(result, !response.ok);
+                return data;
+            } catch (error) {
+                updateResponse(`ML extraction failed: ${error.message}`, true);
+                throw error;
+            }
+        }
+        
+        async function testMLWithEncryption() {
+            const text = document.getElementById('ml-text').value;
+            
+            if (!text) {
+                updateResponse('Transaction text is required', true);
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${getServerUrl()}/ml/extract_and_encrypt`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        email_body: text,
+                        user_id: 'test_user_' + Date.now()
+                    })
+                });
+                
+                const data = await response.json();
+                
+                const result = {
+                    status: response.status,
+                    statusText: response.statusText,
+                    url: `${getServerUrl()}/ml/extract_and_encrypt`,
+                    data: data
+                };
+                
+                updateResponse(result, !response.ok);
+                return data;
+            } catch (error) {
+                updateResponse(`ML encryption test failed: ${error.message}`, true);
+                throw error;
+            }
+        }
+        
+        async function testMLStats() {
+            await makeRequest(`${getServerUrl()}/ml/stats`);
+        }
+        
+        // ML Sample Loading Functions
+        function loadMLSampleStarbucks() {
+            document.getElementById('ml-text').value = 
+                "Your card ending in 1234 was charged $45.67 at Starbucks Coffee on March 15, 2024. Transaction ID: TXN123456789. Date: 03/15/2024 2:30 PM. Thank you for your business.";
+        }
+        
+        function loadMLSampleUPI() {
+            document.getElementById('ml-text').value = 
+                "UPI transaction successful! Rs.1500.00 sent to John Doe from your HDFC Bank account ending in 9012. UPI ID: 9010853978@ybl. Transaction ID: 425692851472. Date: 20-Jul-24 14:30.";
+        }
+        
+        function loadMLSampleGas() {
+            document.getElementById('ml-text').value = 
+                "Transaction alert: $67.89 charged at Shell Gas Station #1234 on 03/20/2024 at 2:30 PM. Card ending in 5678. Available balance: $1,234.56.";
+        }
+        
+        function loadMLSampleAmazon() {
+            document.getElementById('ml-text').value = 
+                "Your Amazon order #123-4567890-1234567 has been charged $123.45 to your Visa card ending in 9876. Order placed on March 18, 2024. Expected delivery: March 20, 2024.";
         }
         
         // Set today's date by default

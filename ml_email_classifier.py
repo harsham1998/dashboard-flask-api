@@ -312,17 +312,19 @@ class EmailProcessor:
         transaction_details = self.transaction_extractor.extract_transaction_details(body)
         
         # Format according to new JSON structure
+        credit_or_debit = transaction_details.get('credit_or_debit', 'debit')
+        
         result = {
+            "id": email_data.get('email_id'),  # Use Gmail message ID as transaction ID
             "account_number": transaction_details.get('account_number'),
             "amount": transaction_details.get('amount'),
             "available_balance": transaction_details.get('available_balance'),
             "card_last_four": transaction_details.get('card_last_four'),
             "category": transaction_details.get('category', 'other'),
-            "credit_or_debit": transaction_details.get('credit_or_debit', 'debit'),
+            "credit_or_debit": credit_or_debit,
             "currency": transaction_details.get('currency', 'INR'),
             "date": transaction_details.get('date'),
             "description": transaction_details.get('description'),
-            "from_account": transaction_details.get('from_account'),
             "merchant": transaction_details.get('merchant'),
             "mode": transaction_details.get('mode'),
             "reference_number": transaction_details.get('reference_number'),
@@ -330,6 +332,14 @@ class EmailProcessor:
             "transaction_identifier_id": email_data.get('email_id'),
             "email_subject": email_data.get('subject')
         }
+        
+        # Add from_account and to_account based on transaction type
+        if credit_or_debit == 'credit':
+            result["from_account"] = None  # No source account for credits
+            result["to_account"] = transaction_details.get('to_account') or transaction_details.get('account_number')
+        else:  # debit
+            result["from_account"] = transaction_details.get('from_account') or transaction_details.get('account_number')
+            result["to_account"] = None  # No destination account for debits
         
         return result
     

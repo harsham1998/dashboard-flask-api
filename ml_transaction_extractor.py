@@ -110,6 +110,7 @@ class MLTransactionExtractor:
             'reference_number': self._extract_reference_number(doc, email_body),
             'category': self._extract_category(doc, email_body),
             'from_account': self._extract_from_account(doc, email_body),
+            'to_account': self._extract_to_account(doc, email_body),
             'currency': self._extract_currency(doc, email_body),
             'description': self._extract_description(doc, email_body),
             'available_balance': self._extract_available_balance(doc, email_body)
@@ -122,6 +123,7 @@ class MLTransactionExtractor:
         # Enhanced currency patterns for Indian and international transactions (prioritized)
         currency_patterns = [
             # High priority: Transaction amount patterns (not balance)
+            r'Rs\.?\s*(\d{1,4}(?:,\d{3})*(?:\.\d{2})?)\s+is\s+successfully\s+(?:credited|debited)\s+to\s+your\s+account',  # HDFC UPI pattern
             r'Rs\.?(\d{1,4}(?:,\d{3})*(?:\.\d{2})?)\s+has\s+been\s+(?:debited|credited)\s+from\s+account',  # HDFC account pattern
             r'Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+has\s+been\s+(?:debited|credited)\s+from\s+your\s+HDFC',  # HDFC credit card pattern
             r'credit\s+card\s+no\.\s+XX\d+\s+for\s+INR\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',  # Axis specific pattern
@@ -171,7 +173,28 @@ class MLTransactionExtractor:
     
     def _extract_merchant(self, doc, text: str) -> Optional[str]:
         """Extract merchant name using NLP"""
-        # Enhanced merchant patterns for Indian transactions
+        # Enhanced merchant patterns for Indian transactions (in priority order)
+        
+        # High priority: UPI patterns - specific to extract recipient name (return immediately if found)
+        upi_patterns = [
+            r'by\s+VPA\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+M\s+([A-Z][A-Z\s]+)\s+on',  # HDFC "by VPA 8639485842@ybl M NEERAJ on"
+            r'to\s+VPA\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to VPA shankarjala0205@okhdfcbank JALA SHANKAR on"
+            r'to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to paytm.s14s0zk@pty YERGAMONI RAMAKRISHNA on"
+            r'Credit Card XX\d+\s+to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # Full pattern with name
+        ]
+        
+        # Check UPI patterns first and return immediately if found
+        for pattern in upi_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                merchant = match.group(1).strip()
+                # Clean up merchant name
+                merchant = re.sub(r'\s+on$', '', merchant)
+                merchant = re.sub(r'\s+at$', '', merchant)
+                if len(merchant) > 2:
+                    return merchant
+        
+        # Medium priority: Other payment patterns
         merchant_patterns = [
             # Razorpay and payment gateway patterns (more specific)
             r'To:\s+([A-Za-z][A-Za-z\s]*?)\s+₹',  # "To: Netplay ₹210.00" - non-greedy
@@ -179,10 +202,6 @@ class MLTransactionExtractor:
             r'Subject:\s*Payment successful for\s+([A-Za-z][A-Za-z\s]*?)(?:\s+Please|$)',
             r'payment\s+to\s+([A-Za-z][A-Za-z\s]*?)\s+(?:is|was|has)',  # "payment to Netplay is"
             
-            # UPI patterns - specific to extract recipient name
-            r'to\s+VPA\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to VPA shankarjala0205@okhdfcbank JALA SHANKAR on"
-            r'to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to paytm.s14s0zk@pty YERGAMONI RAMAKRISHNA on"
-            r'Credit Card XX\d+\s+to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # Full pattern with name
             r'to\s+([a-zA-Z0-9._-]+@[a-zA-Z]+)\s+on',  # Fallback: Extract UPI ID if no name
             r'at\s+([A-Z][A-Z]*)\s+on',  # "at INNOVATIVE on" - single word merchant
             
@@ -467,6 +486,30 @@ class MLTransactionExtractor:
                 return account
         return None
     
+    def _extract_to_account(self, doc, text: str) -> Optional[str]:
+        """Extract destination account information for credit transactions"""
+        # Only extract to_account for credit transactions
+        if 'credit' not in text.lower():
+            return None
+            
+        account_patterns = [
+            r'credited\s+to\s+your\s+account\s+\*\*(\d{4,})',  # HDFC "credited to your account **7312"
+            r'credited\s+to\s+account\s+(?:XX)?(\d{4,})',
+            r'credited\s+to\s+([A-Za-z\s]+Bank\s+[A-Za-z\s]*Account)',
+            r'credited\s+to\s+your\s+([A-Za-z\s]+(?:Account|Card))',
+            r'credit(?:ed)?\s+to\s+([A-Za-z\s]+Bank\s+[A-Za-z\s]*)'
+        ]
+        
+        for pattern in account_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                account = match.group(1).strip()
+                # For HDFC account numbers, return with **
+                if account.isdigit():
+                    return f"**{account}"
+                return account
+        return None
+    
     def _extract_currency(self, doc, text: str) -> str:
         """Extract currency from transaction"""
         text_lower = text.lower()
@@ -483,6 +526,7 @@ class MLTransactionExtractor:
     def _extract_account_number(self, doc, text: str) -> Optional[str]:
         """Extract account number from transaction"""
         account_patterns = [
+            r'to\s+your\s+account\s+\*\*(\d{4,})',  # HDFC "to your account **7312"
             r'account\s+(?:no\.?|number)\s+(?:XX)?(\d{4,})',
             r'a/c\s+(?:XX)?(\d{4,})',
             r'account\s+ending\s+(?:in\s+)?(\d{4})',

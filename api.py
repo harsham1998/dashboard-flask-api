@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify, redirect
+from flask import Flask, request, jsonify, redirect, send_file
 from flask_cors import CORS
 from datetime import datetime
 import pytz
@@ -628,6 +628,42 @@ def test_api_html():
                     </div>
                 </div>
 
+                <!-- ML Transaction Extraction Test -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('ml-extract')">
+                        <div class="api-title">🤖 ML Transaction Extraction</div>
+                        <span class="api-method method-post">POST</span>
+                    </div>
+                    <div class="api-body" id="ml-extract">
+                        <p><strong>Endpoint:</strong> /ml/extract</p>
+                        <p><strong>Description:</strong> Extract transaction details using Machine Learning</p>
+                        
+                        <div style="margin: 10px 0;">
+                            <label for="ml-email-body"><strong>Email/Transaction Text:</strong></label>
+                            <textarea id="ml-email-body" rows="4" style="width: 100%; margin-top: 5px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" placeholder="Your card ending in 1234 was charged $45.67 at Starbucks Coffee on March 15, 2024...">Your card ending in 1234 was charged $45.67 at Starbucks Coffee on March 15, 2024. Transaction ID: TXN123456789</textarea>
+                        </div>
+                        
+                        <div style="margin: 10px 0;">
+                            <button class="btn" onclick="testMLExtraction()">🧠 Extract with ML</button>
+                            <button class="btn" onclick="loadSampleStarbucks()" style="background: #6c757d; margin-left: 10px;">Starbucks Sample</button>
+                            <button class="btn" onclick="loadSampleUPI()" style="background: #6c757d; margin-left: 5px;">UPI Sample</button>
+                            <button class="btn" onclick="loadSampleGas()" style="background: #6c757d; margin-left: 5px;">Gas Sample</button>
+                        </div>
+                        
+                        <div class="response-section" id="ml-extract-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>ML Extraction Result:</h4>
+                                <span class="status-badge" id="ml-extract-status"></span>
+                            </div>
+                            <div class="response-body" id="ml-extract-body"></div>
+                            <div id="ml-confidence-display" style="margin-top: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 14px;">
+                                ML Confidence: Will show after extraction
+                            </div>
+                        </div>
+                        <div class="loading" id="ml-extract-loading">Extracting...</div>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -739,6 +775,80 @@ def test_api_html():
                 const limit = document.getElementById('transactions-limit').value;
                 const url = `/transactions?limit=${limit}`;
                 await testAPI('get-transactions', 'GET', url);
+            }
+
+            // ML Testing Functions
+            async function testMLExtraction() {
+                const emailBody = document.getElementById('ml-email-body').value;
+                
+                if (!emailBody.trim()) {
+                    alert('Please enter some transaction text to extract');
+                    return;
+                }
+
+                const loadingEl = document.getElementById('ml-extract-loading');
+                const responseEl = document.getElementById('ml-extract-response');
+                const statusEl = document.getElementById('ml-extract-status');
+                const bodyEl = document.getElementById('ml-extract-body');
+                const confidenceEl = document.getElementById('ml-confidence-display');
+
+                loadingEl.style.display = 'block';
+                responseEl.style.display = 'none';
+
+                try {
+                    const response = await fetch('/ml/extract', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            email_body: emailBody
+                        })
+                    });
+
+                    const data = await response.json();
+                    
+                    loadingEl.style.display = 'none';
+                    responseEl.style.display = 'block';
+                    
+                    statusEl.textContent = response.ok ? 'SUCCESS' : 'ERROR';
+                    statusEl.className = 'status-badge ' + (response.ok ? 'status-success' : 'status-error');
+                    
+                    bodyEl.textContent = JSON.stringify(data, null, 2);
+
+                    // Update confidence display
+                    if (data.extracted_data && data.extracted_data.raw_confidence !== undefined) {
+                        const confidence = (data.extracted_data.raw_confidence * 100).toFixed(1);
+                        const amount = data.extracted_data.amount || 'N/A';
+                        const merchant = data.extracted_data.merchant || 'N/A';
+                        confidenceEl.textContent = `ML Confidence: ${confidence}% | Amount: $${amount} | Merchant: ${merchant}`;
+                    } else {
+                        confidenceEl.textContent = 'ML Confidence: No data extracted';
+                    }
+
+                } catch (error) {
+                    loadingEl.style.display = 'none';
+                    responseEl.style.display = 'block';
+                    statusEl.textContent = 'ERROR';
+                    statusEl.className = 'status-badge status-error';
+                    bodyEl.textContent = 'Request failed: ' + error.message;
+                    confidenceEl.textContent = 'ML Confidence: Error occurred';
+                }
+            }
+
+            function loadSampleStarbucks() {
+                document.getElementById('ml-email-body').value = 
+                    "Your card ending in 1234 was charged $45.67 at Starbucks Coffee on March 15, 2024. Transaction ID: TXN123456789. Date: 03/15/2024 2:30 PM. Thank you for your business.";
+            }
+
+            function loadSampleUPI() {
+                document.getElementById('ml-email-body').value = 
+                    "UPI transaction successful! Rs.1500.00 sent to John Doe from your HDFC Bank account ending in 9012. UPI ID: 9010853978@ybl. Transaction ID: 425692851472. Date: 20-Jul-24 14:30.";
+            }
+
+            function loadSampleGas() {
+                document.getElementById('ml-email-body').value = 
+                    "Transaction alert: $67.89 charged at Shell Gas Station #1234 on 03/20/2024 at 2:30 PM. Card ending in 5678. Available balance: $1,234.56.";
             }
         </script>
     </body>
@@ -2540,6 +2650,58 @@ def run_background_scheduler():
 
 # Schedule Gmail checking every 5 minutes
 schedule.every(5).minutes.do(check_all_users_gmail)
+
+# ML Testing Endpoint
+@app.route('/ml/extract', methods=['POST'])
+def ml_extract_endpoint():
+    """Extract transaction details using ML for testing"""
+    try:
+        data = request.get_json()
+        if not data or 'email_body' not in data:
+            return jsonify({'error': 'email_body required in JSON payload'}), 400
+        
+        email_body = data['email_body'].strip()
+        if not email_body:
+            return jsonify({'error': 'email_body cannot be empty'}), 400
+        
+        # Use the same ML function as the main API
+        extracted_data = ml_parse_transaction_email(email_body)
+        
+        if extracted_data:
+            # Calculate basic confidence score for display
+            confidence_score = 0.0
+            total_fields = 7
+            if extracted_data.get('amount'): confidence_score += 1.0
+            if extracted_data.get('merchant'): confidence_score += 1.0
+            if extracted_data.get('date'): confidence_score += 1.0
+            if extracted_data.get('credit_or_debit'): confidence_score += 1.0
+            if extracted_data.get('card_last_four'): confidence_score += 1.0
+            if extracted_data.get('category'): confidence_score += 1.0
+            if extracted_data.get('description'): confidence_score += 1.0
+            
+            extracted_data['raw_confidence'] = confidence_score / total_fields
+            
+            response = {
+                'success': True,
+                'email_body_length': len(email_body),
+                'extracted_data': extracted_data,
+                'ml_system': 'spacy_nlp_integration'
+            }
+        else:
+            response = {
+                'success': False,
+                'message': 'No transaction detected in the provided text',
+                'email_body_length': len(email_body)
+            }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'error_type': type(e).__name__
+        }), 500
 
 # Start background scheduler
 def start_background_services():

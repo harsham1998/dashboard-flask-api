@@ -5,8 +5,14 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from ml_transaction_extractor import MLTransactionExtractor, initialize_ml_extractor
 import json
 from datetime import datetime
-import pytz
-import requests
+try:
+    import pytz
+except ImportError:
+    pytz = None
+try:
+    import requests
+except ImportError:
+    requests = None
 
 # Global ML extractor instance
 ml_extractor = None
@@ -62,8 +68,11 @@ def ml_extract_transaction_from_email(email):
         
         if transaction and transaction.get('amount'):
             # Build transaction object with ML-extracted data
-            ist_tz = pytz.timezone('Asia/Kolkata')
-            now_ist = datetime.now(ist_tz)
+            if pytz:
+                ist_tz = pytz.timezone('Asia/Kolkata')
+                now_ist = datetime.now(ist_tz)
+            else:
+                now_ist = datetime.now()
             
             txn_obj = {
                 'id': email.get('id'),
@@ -75,7 +84,7 @@ def ml_extract_transaction_from_email(email):
                 'email_id': email.get('id'),
                 'email_subject': subject,
                 'email_from': sender,
-                'email_ist_date': now_ist.strftime('%Y-%m-%d %H:%M:%S IST'),
+                'email_ist_date': now_ist.strftime('%Y-%m-%d %H:%M:%S') + (' IST' if pytz else ''),
                 'category': transaction.get('category'),
                 'description': transaction.get('description'),
                 'card_last_four': transaction.get('card_last_four'),

@@ -119,14 +119,22 @@ class MLTransactionExtractor:
     
     def _extract_amount(self, doc, text: str) -> Optional[float]:
         """Extract transaction amount using NLP and patterns"""
-        # Enhanced currency patterns for Indian and international transactions
+        # Enhanced currency patterns for Indian and international transactions (prioritized)
         currency_patterns = [
-            # Indian Rupee patterns
-            r'Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
-            r'INR\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
-            r'₹\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            # High priority: Transaction amount patterns (not balance)
+            r'Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+has\s+been\s+(?:debited|credited)',  # HDFC pattern
+            r'credit\s+card\s+no\.\s+XX\d+\s+for\s+INR\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',  # Axis specific pattern
+            r'for\s+INR\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+at',  # General Axis pattern
+            r'₹(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+Paid\s+Successfully',  # Razorpay pattern
+            
+            # Medium priority: General transaction patterns
             r'(?:debited|credited|charged|paid)\s+.*?Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
             r'Amount.*?Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'₹\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            
+            # Lower priority: Generic patterns (might catch balance)
+            r'Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'INR\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
             
             # US Dollar patterns
             r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
@@ -136,35 +144,47 @@ class MLTransactionExtractor:
             r'Charged:?\s*\$?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)'
         ]
         
-        amounts = []
+        # Check patterns in priority order - return first valid match
         for pattern in currency_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
                 try:
                     amount = float(match.replace(',', ''))
                     if 0.01 <= amount <= 100000:  # Reasonable transaction range
-                        amounts.append(amount)
+                        return amount  # Return first valid amount found
                 except ValueError:
                     continue
         
-        # Use NLP to find MONEY entities
+        # Use NLP to find MONEY entities as fallback
         for ent in doc.ents:
             if ent.label_ == "MONEY":
                 amount_text = re.sub(r'[^\d.,]', '', ent.text)
                 try:
                     amount = float(amount_text.replace(',', ''))
                     if 0.01 <= amount <= 100000:
-                        amounts.append(amount)
+                        return amount
                 except ValueError:
                     continue
         
-        return max(amounts) if amounts else None
+        return None
     
     def _extract_merchant(self, doc, text: str) -> Optional[str]:
         """Extract merchant name using NLP"""
         # Enhanced merchant patterns for Indian transactions
         merchant_patterns = [
-            # UPI patterns - extract name from Paytm UPI
+            # Razorpay and payment gateway patterns (more specific)
+            r'To:\s+([A-Za-z][A-Za-z\s]*?)\s+₹',  # "To: Netplay ₹210.00" - non-greedy
+            r'Payment successful for\s+([A-Za-z][A-Za-z\s]*?)(?:\s+Please|$)',  # Stop at "Please"
+            r'Subject:\s*Payment successful for\s+([A-Za-z][A-Za-z\s]*?)(?:\s+Please|$)',
+            r'payment\s+to\s+([A-Za-z][A-Za-z\s]*?)\s+(?:is|was|has)',  # "payment to Netplay is"
+            
+            # UPI patterns - specific to extract recipient name
+            r'to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to paytm.s14s0zk@pty YERGAMONI RAMAKRISHNA on"
+            r'Credit Card XX\d+\s+to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # Full pattern with name
+            r'to\s+([a-zA-Z0-9._-]+@[a-zA-Z]+)\s+on',  # Fallback: Extract UPI ID if no name
+            r'at\s+([A-Z][A-Z]*)\s+on',  # "at INNOVATIVE on" - single word merchant
+            
+            # UPI patterns - extract name from Paytm UPI  
             r'paytm\.[a-zA-Z0-9]+@pty\s+([A-Z\s]+)',  # Paytm pattern
             r'to\s+[a-zA-Z0-9._]+@[a-zA-Z]+\s+([A-Z\s]+)',  # UPI ID + Name
             r'to\s+([A-Z][A-Z\s]+?)\s+on\s+\d',  # Name before date (non-greedy)
@@ -205,7 +225,7 @@ class MLTransactionExtractor:
             # Remove duplicates and rank by frequency
             merchant_counts = {}
             for merchant in merchants:
-                clean_merchant = re.sub(r'[^\w\s]', '', merchant).strip()
+                clean_merchant = re.sub(r'[^\w\s@.\-_]', '', merchant).strip()  # Keep @, ., -, _ for UPI IDs
                 if len(clean_merchant) > 2:
                     merchant_counts[clean_merchant] = merchant_counts.get(clean_merchant, 0) + 1
             
@@ -224,8 +244,9 @@ class MLTransactionExtractor:
             r'(\d{1,2}-\d{1,2}-\d{2})',      # Direct format: 01-07-25
             r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
             r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})',
+            r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s+\d{4})',  # "28 Jun, 2025"
             r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4})',
-            r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4})'
+            r'Paid\s+On\s+(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s+\d{4})'  # "Paid On 28 Jun, 2025"
         ]
         
         dates = []
@@ -247,6 +268,10 @@ class MLTransactionExtractor:
                 formats = [
                     '%d-%m-%Y',    # 20-07-2025 (convert to DD-MM-YY)
                     '%d-%m-%y',    # 01-07-25
+                    '%d %b, %Y',   # 28 Jun, 2025 (Razorpay format)
+                    '%d %B, %Y',   # 28 June, 2025 (full month name)
+                    '%d %b %Y',    # 28 Jun 2025 (no comma)
+                    '%d %B %Y',    # 28 June 2025 (no comma)
                     '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d', '%Y-%m-%d', 
                     '%B %d, %Y', '%b %d, %Y'
                 ]
@@ -322,6 +347,10 @@ class MLTransactionExtractor:
         """Extract main transaction description sentence"""
         # Look for main transaction sentence patterns
         desc_patterns = [
+            # Razorpay payment patterns
+            r'(₹\d+\.\d+\s+Paid Successfully.*?Paid On\s+\d{1,2}\s+\w+,?\s+\d{4})',  # Full Razorpay description
+            r'(₹\d+\.\d+\s+Paid Successfully.*?pay_[A-Za-z0-9_]+)',  # Description with payment ID
+            
             # Credit card transaction patterns
             r'(Thank you for using your credit card.*?available limit is now.*?\.)',
             r'(Thank you for using your credit card.*?on\s+\d{2}-\d{2}-\d{4}.*?IST\.)',
@@ -393,6 +422,12 @@ class MLTransactionExtractor:
     def _extract_reference_number(self, doc, text: str) -> Optional[str]:
         """Extract transaction reference number"""
         ref_patterns = [
+            # Razorpay payment ID patterns (priority)
+            r'Payment\s+Id\s+(pay_[A-Za-z0-9_]{10,})',  # "Payment Id pay_QmX8YS1PDNwFUJ"
+            r'payment\s+id[:\s]+(pay_[A-Za-z0-9_]{10,})',  # Various payment id formats
+            r'(pay_[A-Za-z0-9_]{10,})',  # Direct payment ID match
+            
+            # Standard UPI and transaction references
             r'UPI\s+transaction\s+reference\s+number\s+is\s+([A-Za-z0-9]{6,})',
             r'reference\s+number\s+is\s+([A-Za-z0-9]{6,})',
             r'transaction\s+reference\s+number\s+is\s+([A-Za-z0-9]{6,})',

@@ -6,11 +6,10 @@ import pytz
 import time
 import requests
 import base64
-import re
-import html
 from email.utils import parsedate_to_datetime
 from firebase_service import FirebaseService
 from text_processor import TextProcessor
+from ml_email_classifier import classify_and_process_email, batch_process_emails
 from ml_integration import ml_parse_transaction_email
 import threading
 import schedule
@@ -1622,152 +1621,90 @@ def refresh_gmail_token_get():
         return jsonify({'error': f'Failed to refresh token: {str(e)}'}), 500
 
 def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
-    """Get all emails with details and identified transactions for a specific user"""
+    """Get all emails with ML-powered classification and transaction extraction"""
     try:
         access_token = gmail_tokens['access_token']
         
-        # Build comprehensive search query for transaction-related emails, exclude promotions
-        search_query_parts = [
-            'transaction', 'payment', 'purchase', 'charge', 'debit', 'credit', 'receipt', 'invoice',
-            'bank', 'upi', 'transfer', 'credited', 'debited', 'rs', 'inr', 'rupees',
-            'hdfc', 'icici', 'sbi', 'axis', 'kotak', 'pnb', 'canara', 'union',
-            'paytm', 'phonepe', 'googlepay', 'amazonpay', 'mobikwik', 'freecharge',
-            'visa', 'mastercard', 'rupay',
-            'alert', 'notification', 'statement', 'balance', 'withdraw', 'deposit'
-        ]
-        # Exclude category:promotions
+        # Simple time-based search - let ML classifier handle identification
         time_filter = f'newer_than:{minutes}m' if minutes <= 60 else f'newer_than:{max(1, int(minutes / 60))}h'
-        search_query = f'({" OR ".join(search_query_parts)}) {time_filter} -category:promotions'
+        search_query = f'{time_filter} -category:promotions'
         
         print(f"Gmail search query: {search_query}")
         print(f"Searching for emails in last {minutes} minutes...")
         
-        # Get emails from Gmail API (limit to 20 for 5min, can be tuned)
+        # Get emails from Gmail API
         email_list = search_gmail_emails(access_token, search_query, max_results=20)
-        
         print(f"Found {len(email_list)} emails from Gmail API")
         
-        # If no emails found with transaction terms, try a time-only search
+        # If no emails found, try broader search
+        if not email_list and minutes > 60:
+            fallback_query = f'newer_than:1d'
+            email_list = search_gmail_emails(access_token, fallback_query, max_results=10)
+            print(f"Found {len(email_list)} emails with fallback search")
+        
         if not email_list:
-            print(f"No emails found with transaction terms, trying time-only search for last {minutes} minutes...")
-            time_only_query = time_filter
-            email_list = search_gmail_emails(access_token, time_only_query, max_results=20)
-            print(f"Found {len(email_list)} emails with time-only search")
-            
-        # Final fallback only if debugging is needed (remove transaction filtering)
-        if not email_list and minutes > 60:  # Only for longer periods
-            print("No emails found with time filter, trying broader time range for debugging...")
-            fallback_query = f'newer_than:1d'  # Last day for debugging
-            email_list = search_gmail_emails(access_token, fallback_query, max_results=5)
-            print(f"Found {len(email_list)} emails with fallback search (debugging)")
+            return {
+                'emails': [],
+                'transactions': [],
+                'total_emails': 0,
+                'total_transactions': 0
+            }
         
-        # IST timezone
+        # Get full email details
+        full_emails = []
         ist_tz = pytz.timezone('Asia/Kolkata')
-        
-        all_emails = []
-        transactions = []
-        
-        print(f"Processing {len(email_list)} emails...")
-        
         now_ist = datetime.now(ist_tz)
+        
         for i, email_data in enumerate(email_list):
-            print(f"Processing email {i+1}/{len(email_list)}: {email_data.get('id', 'unknown')}")
+            print(f"Retrieving email {i+1}/{len(email_list)}: {email_data.get('id', 'unknown')}")
             email = get_gmail_email(access_token, email_data['id'])
             if email:
-                print(f"Successfully retrieved email {i+1}")
-                email_info = {
-                    'id': email['id'],
-                    'thread_id': email['threadId'],
-                    'snippet': email.get('snippet', ''),
-                    'payload': email.get('payload', {}),
-                    'size_estimate': email.get('sizeEstimate', 0),
-                    'history_id': email.get('historyId', ''),
-                    'internal_date': email.get('internalDate', ''),
-                    'label_ids': email.get('labelIds', [])
-                }
-                # Convert Gmail internal date to IST
-                email_ist_dt = None
-                if email_info['internal_date']:
+                # Time filtering
+                if email.get('internalDate'):
                     try:
-                        timestamp_ms = int(email_info['internal_date'])
+                        timestamp_ms = int(email['internalDate'])
                         timestamp_s = timestamp_ms / 1000
                         utc_dt = datetime.fromtimestamp(timestamp_s, tz=pytz.UTC)
                         ist_dt = utc_dt.astimezone(ist_tz)
-                        email_info['ist_date'] = ist_dt.strftime('%Y-%m-%d %H:%M:%S %Z')
-                        email_info['ist_timestamp'] = ist_dt.isoformat()
-                        email_ist_dt = ist_dt
+                        delta_minutes = (now_ist - ist_dt).total_seconds() / 60.0
+                        if delta_minutes > minutes or delta_minutes < 0:
+                            print(f"Skipping email {i+1}: outside requested time window")
+                            continue
                     except:
-                        email_info['ist_date'] = 'Unable to parse'
-                        email_info['ist_timestamp'] = None
-                # Filter by IST date
-                if email_ist_dt:
-                    delta_minutes = (now_ist - email_ist_dt).total_seconds() / 60.0
-                    if delta_minutes > minutes or delta_minutes < 0:
-                        print(f"Skipping email {i+1}: outside requested time window")
-                        continue
-                # Extract subject, sender, and body
-                headers = email_info['payload'].get('headers', [])
-                for header in headers:
-                    name = header.get('name', '').lower()
-                    value = header.get('value', '')
-                    if name == 'subject':
-                        email_info['subject'] = value
-                    elif name == 'from':
-                        email_info['from'] = value
-                    elif name == 'to':
-                        email_info['to'] = value
-                    elif name == 'date':
-                        email_info['date_header'] = value
-                body = extract_email_body(email_info['payload'])
-                email_info['body'] = body  # Always decoded
-                transaction, transaction_log = extract_transaction_from_email(email)
-                if transaction:
-                    print(f"Email {i+1} has transaction: {transaction.get('amount', 'unknown')} {transaction.get('currency', 'unknown')}")
-                    transaction_clean = {
-                        'id': transaction.get('id'),
-                        'amount': transaction.get('amount'),
-                        'currency': transaction.get('currency'),
-                        'date': transaction.get('date'),
-                        'merchant': transaction.get('merchant'),
-                        'type': transaction.get('type'),
-                        'account': transaction.get('account'),
-                        'category': transaction.get('category'),
-                        'description': transaction.get('description'),
-                        'source': transaction.get('source'),
-                        'processed': transaction.get('processed'),
-                        'verified': transaction.get('verified'),
-                        'dashboard_user_email': user_email,
-                        'gmail_source': user_email,
-                        'email_id': email_info['id'],
-                        'email_subject': email_info.get('subject', ''),
-                        'email_from': email_info.get('from', ''),
-                        'email_ist_date': email_info.get('ist_date', ''),
-                        'body': body
-                    }
-                    transactions.append(transaction_clean)
-                    email_info['has_transaction'] = True
-                    email_info['transaction_data'] = transaction_clean
-                    email_info['not_transaction_reason'] = None
-                else:
-                    print(f"Email {i+1} has no transaction data: {transaction_log}")
-                    email_info['has_transaction'] = False
-                    email_info['transaction_data'] = None
-                    email_info['not_transaction_reason'] = transaction_log
-                all_emails.append(email_info)
-            else:
-                print(f"Failed to retrieve email {i+1}")
+                        pass
+                
+                full_emails.append(email)
+                print(f"Added email {i+1} for ML processing")
         
-        print(f"Final results: {len(all_emails)} emails processed, {len(transactions)} transactions found")
+        print(f"Processing {len(full_emails)} emails through ML classifier...")
+        
+        # Process emails through ML classifier
+        transactions = batch_process_emails(full_emails)
+        
+        print(f"ML processing complete: {len(transactions)} transactions found")
+        
+        # Prepare email summaries for response
+        processed_emails = []
+        for email in full_emails:
+            headers = email.get('payload', {}).get('headers', [])
+            email_summary = {
+                'id': email.get('id'),
+                'subject': next((h['value'] for h in headers if h['name'] == 'Subject'), ''),
+                'from': next((h['value'] for h in headers if h['name'] == 'From'), ''),
+                'snippet': email.get('snippet', ''),
+                'has_transaction': any(t['transaction_identifier_id'] == email.get('id') for t in transactions)
+            }
+            processed_emails.append(email_summary)
         
         return {
-            'emails': all_emails,
+            'emails': processed_emails,
             'transactions': transactions,
-            'total_emails': len(all_emails),
+            'total_emails': len(processed_emails),
             'total_transactions': len(transactions)
         }
         
     except Exception as e:
-        print(f"Error getting Gmail emails with details for {user_email}: {str(e)}")
+        print(f"Error in ML email processing for {user_email}: {str(e)}")
         return {
             'emails': [],
             'transactions': [],
@@ -1808,38 +1745,6 @@ def decode_gmail_base64(encoded_data):
         # Return original data if decoding fails
         return encoded_data
 
-def extract_email_body(payload):
-    """Extract email body from Gmail payload with proper Base64url decoding"""
-    try:
-        raw_body = ''
-        if isinstance(payload, dict):
-            if 'parts' in payload:
-                for part in payload['parts']:
-                    if part.get('mimeType') == 'text/plain':
-                        if 'data' in part.get('body', {}):
-                            decoded_body = decode_gmail_base64(part['body']['data'])
-                            raw_body += decoded_body
-                    elif part.get('mimeType') == 'text/html':
-                        if 'data' in part.get('body', {}):
-                            decoded_html = decode_gmail_base64(part['body']['data'])
-                            raw_body += decoded_html
-                    elif 'parts' in part:
-                        raw_body += extract_email_body(part)
-            else:
-                if payload.get('mimeType') == 'text/plain':
-                    if 'data' in payload.get('body', {}):
-                        raw_body = decode_gmail_base64(payload['body']['data'])
-                elif payload.get('mimeType') == 'text/html':
-                    if 'data' in payload.get('body', {}):
-                        decoded_html = decode_gmail_base64(payload['body']['data'])
-                        raw_body = decoded_html
-
-        # Clean the raw body using your helper
-        cleaned_body = clean_email_body(raw_body)
-        return cleaned_body
-    except Exception as e:
-        print(f"Error extracting email body: {str(e)}")
-        return ''
 
 def find_user_by_gmail_account(gmail_account):
     """Find the actual user who owns this Gmail account by searching through Firebase users"""
@@ -2116,8 +2021,8 @@ def get_gmail_transactions():
             email = get_gmail_email(tokens['access_token'], email_data['id'])
             
             if email:
-                # Extract transaction data
-                transaction = extract_transaction_from_email(email)
+                # Extract transaction data using new ML classifier
+                transaction = classify_and_process_email(email)
                 if transaction:
                     transactions.append(transaction)
         
@@ -2191,428 +2096,6 @@ def get_gmail_email(access_token, message_id):
         print(f"Get email error: {str(e)}")
         return None
 
-def extract_transaction_from_email(email):
-    """Extract transaction data from email"""
-    try:
-        payload = email.get('payload', {})
-        headers = payload.get('headers', [])
-        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
-        sender = next((h['value'] for h in headers if h['name'] == 'From'), '')
-        date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-        body = extract_email_body(payload)
-        # Use your parsing function
-        transaction = ml_parse_transaction_email(body)
-        transaction_log = None
-        if transaction and transaction.get('amount'):
-            # Build new transaction object as per requirements
-            ist_tz = pytz.timezone('Asia/Kolkata')
-            now_ist = datetime.now(ist_tz)
-            txn_obj = {
-                'id': email.get('id'),
-                'amount': transaction.get('amount'),
-                'currency': transaction.get('currency', 'INR'),
-                'merchant': transaction.get('merchant'),
-                'type': transaction.get('credit_or_debit'),
-                'reference_number': transaction.get('reference_number'),
-                'email_id': email.get('id'),
-                'email_subject': subject,
-                'email_from': sender,
-                'email_ist_date': now_ist.strftime('%Y-%m-%d %H:%M:%S IST'),
-                'gmail_source': email.get('gmail_source'),
-                'dashboard_user_email': email.get('dashboard_user_email'),
-                'description': body
-            }
-            transaction_log = 'Transaction detected.'
-            return txn_obj, transaction_log
-        else:
-            transaction_log = 'No transaction detected or amount missing.'
-            return None, transaction_log
-    except Exception as e:
-        print(f"Extract transaction error: {str(e)}")
-        return None, None
-# Helper functions from user
-def clean_email_body(raw_body):
-    try:
-        # Instead of decoding unicode, just replace common unicode escapes manually
-        # Replace \u003C and \u003E with < and >
-        safe_body = re.sub(r'\\u003[Cc]', '<', raw_body)
-        safe_body = re.sub(r'\\u003[Ee]', '>', safe_body)
-        # Replace other \uXXXX escapes with a placeholder
-        safe_body = re.sub(r'\\u[0-9A-Fa-f]{4}', '', safe_body)
-
-        # Unescape HTML entities
-        unescaped = html.unescape(safe_body)
-
-        # Remove tracking links like <https://...>
-        unescaped = re.sub(r'<https?://[^>]+>', '', unescaped)
-
-        # Remove script/style/head/meta/title tags and all HTML tags using regex
-        unescaped = re.sub(r'<(script|style|head|meta|title)[^>]*>.*?</\1>', '', unescaped, flags=re.DOTALL|re.IGNORECASE)
-        # Remove all HTML tags
-        text = re.sub(r'<[^>]+>', '', unescaped)
-        # Remove links
-        text = re.sub(r'https?://\S+', '', text)
-        # Remove extra whitespace
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
-
-    except Exception as e:
-        return f"Error cleaning email: {str(e)}"
-
-def parse_transaction_email(text):
-    """
-    Extracts structured transaction info from clean email body
-    """
-    try:
-        text_lower = text.lower()
-
-        # Transaction keywords for identification
-        keywords = [
-            "debited", "credited", "transaction", "payment of", "paid to", "purchased at",
-            "withdrawn", "spent", "credited to your account", "upi reference", "imps", "neft",
-            "rtgs", "pos", "transfer of", "card ending", "your account has been debited"
-        ]
-
-        # Only proceed if at least one keyword is present
-        if not any(k in text_lower for k in keywords):
-            return None
-
-        result = {
-            "amount": None,
-            "merchant": None,
-            "bank": None,
-            "transaction_type": None,
-            "credit_or_debit": None,
-            "date": None,
-            "reference_number": None,
-            "card_info": None,
-            "currency": "INR",
-            "category": None,
-            "mode": None,
-            "application": None
-        }
-
-        # Amount
-        amt_match = re.search(r'(rs\.?|inr|₹)\s*([0-9,]+\.\d{1,2})', text_lower)
-        if amt_match:
-            result['amount'] = float(amt_match.group(2).replace(',', ''))
-
-        # Credit or Debit
-        if 'debited' in text_lower:
-            result['credit_or_debit'] = 'debit'
-        elif 'credited' in text_lower or 'received' in text_lower:
-            result['credit_or_debit'] = 'credit'
-
-        # Transaction Type
-        if 'upi' in text_lower:
-            result['transaction_type'] = 'upi'
-        elif 'card' in text_lower:
-            result['transaction_type'] = 'card'
-        elif 'neft' in text_lower or 'imps' in text_lower:
-            result['transaction_type'] = 'bank_transfer'
-
-        # Merchant (improved extraction)
-        merchant_match = re.search(r'(?:merchant[:*]?|paid to|payment to|to)\s*([A-Za-z0-9@.\s&-]+?)(?:\s+on|\s+for|\s+date|\s+time|\s+amount|\.|,|$)', text, re.IGNORECASE)
-        if merchant_match:
-            result['merchant'] = merchant_match.group(1).strip()
-        else:
-            # Try to extract from lines containing 'merchant'
-            merchant_line = next((line for line in text.splitlines() if 'merchant' in line.lower()), None)
-            if merchant_line:
-                m = re.search(r'merchant[:*]?\s*([A-Za-z0-9@.\s&-]+)', merchant_line, re.IGNORECASE)
-                if m:
-                    result['merchant'] = m.group(1).strip()
-        # Type (debit/credit)
-        if 'debited' in text_lower or 'payment' in text_lower or 'spent' in text_lower or 'used to make a payment' in text_lower:
-            result['credit_or_debit'] = 'debit'
-        elif 'credited' in text_lower or 'received' in text_lower:
-            result['credit_or_debit'] = 'credit'
-        # Category (basic mapping by merchant keywords)
-        merchant = result.get('merchant', '').lower() if result.get('merchant') else ''
-        category_map = {
-            'amazon': 'shopping',
-            'flipkart': 'shopping',
-            'bigbasket': 'grocery',
-            'grofers': 'grocery',
-            'dmart': 'grocery',
-            'swiggy': 'food',
-            'zomato': 'food',
-            'paytm': 'p2p',
-            'phonepe': 'p2p',
-            'googlepay': 'p2p',
-            'mobikwik': 'p2p',
-            'freecharge': 'p2p',
-            'irctc': 'travel',
-            'onecard': 'card_payment',
-            'tatanu': 'card_payment',
-            'sbi': 'bank_transfer',
-            'icici': 'bank_transfer',
-            'hdfc': 'bank_transfer',
-            'axis': 'bank_transfer',
-            'kotak': 'bank_transfer',
-            'pnb': 'bank_transfer',
-            'canara': 'bank_transfer',
-            'union': 'bank_transfer',
-        }
-        for key, cat in category_map.items():
-            if key in merchant:
-                result['category'] = cat
-                break
-        if not result['category']:
-            result['category'] = 'other'
-        # Mode (Card, UPI, Bank transfer)
-        if 'upi' in text_lower:
-            result['mode'] = 'UPI'
-        elif 'card' in text_lower:
-            result['mode'] = 'Card'
-        elif 'neft' in text_lower or 'imps' in text_lower or 'rtgs' in text_lower:
-            result['mode'] = 'Bank transfer'
-        else:
-            result['mode'] = 'Other'
-        # Application (UPI app name, Card name, fallback to card number)
-        app_patterns = [
-            r'(onecard|tatanu|paytm|phonepe|googlepay|amazonpay|mobikwik|freecharge)',
-            r'card ending in\s*(\d{4})',
-        ]
-        app_match = None
-        for pat in app_patterns:
-            app_match = re.search(pat, text_lower)
-            if app_match:
-                result['application'] = app_match.group(1) if app_match.lastindex >= 1 else app_match.group(0)
-                break
-        if not result['application'] and result.get('card_info'):
-            result['application'] = result['card_info']
-
-        # Bank
-        banks = ['hdfc', 'icici', 'sbi', 'axis', 'kotak', 'pnb', 'canara', 'union', 'bob', 'yes bank']
-        for bank in banks:
-            if bank in text_lower:
-                result['bank'] = bank.upper()
-                break
-
-        # Card Info
-        card_match = re.search(r'card\s+(?:xx|ending\s+in)?\s*(\d{4})', text_lower)
-        if card_match:
-            result['card_info'] = f"XX{card_match.group(1)}"
-
-        # Reference Number (expanded robust extraction)
-        ref_patterns = [
-            r'(?:reference\s*(?:number|no\.?|:|#)?|ref\s*(?:no\.?|:|#)?|ref[:#]?|transaction\s*(?:id|number|no\.?|:|#)?|txn\s*(?:id|number|no\.?|:|#)?|utr\s*(?:no\.?|number|:|#)?|auth\s*(?:code|#:|#)?|approval\s*(?:code|#:|#)?)\s*([A-Za-z0-9]{6,})',
-            r'(?:utr[:#]?|utr\s*(?:no\.?|number|:|#)?)\s*([A-Za-z0-9]{6,})',
-            r'(?:transaction[:#]?|transaction\s*(?:id|number|no\.?|:|#)?)\s*([A-Za-z0-9]{6,})',
-            r'(?:auth[:#]?|auth\s*(?:code|#:|#)?)\s*([A-Za-z0-9]{6,})',
-            r'(?:approval[:#]?|approval\s*(?:code|#:|#)?)\s*([A-Za-z0-9]{6,})',
-            r'(?:ref[:#]?|ref\s*(?:no\.?|:|#)?)\s*([A-Za-z0-9]{6,})',
-        ]
-        ref_match = None
-        for pat in ref_patterns:
-            ref_match = re.search(pat, text_lower)
-            if ref_match:
-                result['reference_number'] = ref_match.group(1)
-                break
-        # Fallback: any 6+ digit/char alphanumeric after 'reference', 'txn', 'utr', 'auth', 'approval', 'ref'
-        if not result.get('reference_number'):
-            fallback_match = re.search(r'(reference|txn|utr|auth|approval|ref)[^A-Za-z0-9]{0,10}([A-Za-z0-9]{6,})', text_lower)
-            if fallback_match:
-                result['reference_number'] = fallback_match.group(2)
-
-        # Date
-        date_match = re.search(r'on\s+(\d{2}[-/]\d{2}[-/]\d{2,4})', text_lower)
-        if date_match:
-            raw_date = date_match.group(1)
-            try:
-                fmt = '%d-%m-%y' if len(raw_date.split('-')[-1]) == 2 else '%d-%m-%Y'
-                result['date'] = datetime.strptime(raw_date, fmt).strftime('%Y-%m-%d')
-            except:
-                pass
-
-        return result
-
-    except Exception as e:
-        return {"error": f"Parsing error: {str(e)}"}
-
-
-def parse_transaction_data(subject, body, sender, date, return_log=False):
-    """Parse transaction data from email content with robust Indian transaction detection"""
-
-    text = f"{subject} {body}".lower()
-    sender_lower = sender.lower() if sender else ""
-
-    # Keywords for transaction identification
-    bank_keywords = [
-        "hdfc", "icici", "sbi", "axis", "kotak", "pnb", "canara", "union", "paytm", "phonepe", "googlepay", "amazonpay", "mobikwik", "freecharge", "bank", "card", "rupay", "mastercard", "visa"
-    ]
-    txn_keywords = [
-        "transaction", "upi", "credit", "debit", "sent", "txn", "received", "transfer", "payment", "deposit", "withdraw", "statement", "alert", "balance", "refund", "purchase", "charged"
-    ]
-
-    # Check for bank keywords in sender
-    sender_has_bank = any(word in sender_lower for word in bank_keywords)
-    # Check for transaction keywords in subject or body
-    subject_has_txn = any(word in subject.lower() for word in txn_keywords + bank_keywords)
-    body_has_txn = any(word in body.lower() for word in txn_keywords + bank_keywords)
-
-    # Enhanced amount patterns for Indian transactions (INR, Rs., etc.)
-    amount_patterns = [
-        r'rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'inr\s*([0-9,]+\.?\d{0,2})',
-        r'₹\s*([0-9,]+\.?\d{0,2})',
-        r'amount:?\s*rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'credited.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'debited.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'paid.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'charged.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'received.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'transfer.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'upi.*?rs[\.\s]*([0-9,]+\.?\d{0,2})',
-        r'\$([0-9,]+\.?\d{0,2})',
-        r'amount:?\s*\$?([0-9,]+\.?\d{0,2})',
-        r'charged?\s*\$?([0-9,]+\.?\d{0,2})',
-        r'paid?\s*\$?([0-9,]+\.?\d{0,2})'
-    ]
-
-    # ...existing code...
-
-# Background email checking service
-def check_all_users_gmail():
-    """Check Gmail for all users and extract transactions - Enhanced version"""
-    global scheduler_stats
-    
-    try:
-        # Initialize IST timezone
-        ist_tz = pytz.timezone('Asia/Kolkata')
-        current_time_ist = datetime.now(ist_tz)
-        
-        print(f"Starting Gmail check for all users at {current_time_ist.strftime('%Y-%m-%d %H:%M:%S IST')}")
-        
-        # Update scheduler stats
-        scheduler_stats['last_run'] = datetime.now().isoformat()
-        scheduler_stats['last_run_ist'] = current_time_ist.isoformat()
-        scheduler_stats['run_count'] += 1
-        scheduler_stats['last_error'] = None
-        
-        # Get all users from Firebase
-        response = requests.get(f"{firebase.base_url}/users.json")
-        if not response.ok:
-            error_msg = f"Failed to get users from Firebase: {response.status_code}"
-            print(error_msg)
-            scheduler_stats['last_error'] = error_msg
-            return
-        
-        users = response.json()
-        if not users:
-            print("No users found")
-            scheduler_stats['total_users_checked'] = 0
-            scheduler_stats['total_emails_found'] = 0
-            scheduler_stats['total_transactions_found'] = 0
-            return
-        
-        total_users_checked = 0
-        total_emails_found = 0
-        total_transactions_found = 0
-        
-        for user_key, user_data in users.items():
-            if not user_data or 'gmailTokens' not in user_data:
-                continue
-            
-            gmail_tokens = user_data['gmailTokens']
-            if not gmail_tokens.get('connected') or not gmail_tokens.get('access_token'):
-                continue
-            
-            user_email = user_data.get('email', '')
-            total_users_checked += 1
-            print(f"Checking Gmail for user: {user_email}")
-            
-            try:
-                # Use enhanced email processing (last 5 minutes)
-                result = get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5)
-                
-                total_emails_found += result['total_emails']
-                total_transactions_found += result['total_transactions']
-                
-                if result['transactions']:
-                    print(f"Found {len(result['transactions'])} new transactions for {user_email}")
-                    
-                    # Store transactions in user's individual JSON file
-                    for transaction in result['transactions']:
-                        transaction['source'] = 'gmail_auto'  # Mark as automatic
-                        success = store_user_transaction_in_file(user_email, transaction)
-                        if not success:
-                            print(f"Failed to store transaction for {user_email}")
-                
-                # Update last check time with IST
-                gmail_tokens['last_email_check'] = current_time_ist.isoformat()
-                user_data['gmailTokens'] = gmail_tokens
-                
-                # Save updated user data
-                firebase.update_user_data(user_key, user_data)
-                
-            except Exception as e:
-                error_msg = f"Error checking Gmail for user {user_email}: {str(e)}"
-                print(error_msg)
-                scheduler_stats['last_error'] = error_msg
-                continue
-        
-        # Update final stats
-        scheduler_stats['total_users_checked'] = total_users_checked
-        scheduler_stats['total_emails_found'] = total_emails_found
-        scheduler_stats['total_transactions_found'] = total_transactions_found
-        
-        print(f"Gmail check completed. Checked {total_users_checked} users, found {total_emails_found} emails, identified {total_transactions_found} transactions.")
-        
-    except Exception as e:
-        error_msg = f"Error in check_all_users_gmail: {str(e)}"
-        print(error_msg)
-        scheduler_stats['last_error'] = error_msg
-
-def get_gmail_transactions_for_user(gmail_tokens, user_email, last_check, minutes=5):
-    """Get transactions from Gmail for a specific user"""
-    try:
-        access_token = gmail_tokens['access_token']
-        
-        # Build search query
-        search_query = 'transaction OR payment OR purchase OR charge OR debit OR receipt OR invoice OR bank OR card'
-        
-        # Only get emails from last X minutes (default 5)
-        if last_check:
-            try:
-                last_check_date = datetime.fromisoformat(last_check.replace('Z', '+00:00'))
-                minutes_ago = max(1, int((datetime.now() - last_check_date).total_seconds() / 60))
-                # Use hours if more than 60 minutes
-                if minutes_ago > 60:
-                    hours_ago = max(1, int(minutes_ago / 60))
-                    search_query += f' newer_than:{hours_ago}h'
-                else:
-                    search_query += f' newer_than:{minutes_ago}m'
-            except:
-                search_query += f' newer_than:{minutes}m'  # Default to specified minutes
-        else:
-            search_query += f' newer_than:{minutes}m'  # Default to specified minutes
-        
-        print(f"Gmail search query: {search_query}")
-        
-        # Get emails from Gmail API
-        emails = search_gmail_emails(access_token, search_query, max_results=20)
-        
-        transactions = []
-        for email_data in emails:
-            # Get full email content
-            email = get_gmail_email(access_token, email_data['id'])
-            
-            if email:
-                # Extract transaction data
-                transaction = extract_transaction_from_email(email)
-                if transaction:
-                    # Add user information
-                    transaction['user_email'] = user_email
-                    transaction['source'] = 'gmail_auto'
-                    transactions.append(transaction)
-        
-        return transactions
-        
-    except Exception as e:
-        print(f"Error getting Gmail transactions for {user_email}: {str(e)}")
-        return []
 
 
 def store_user_transaction(user_key, transaction):
@@ -2647,6 +2130,42 @@ def run_background_scheduler():
     while True:
         schedule.run_pending()
         time.sleep(30)  # Check every 30 seconds
+
+def check_all_users_gmail():
+    """Check Gmail for all users using ML classification"""
+    try:
+        print("🔄 Checking Gmail for all users...")
+        
+        # Get all users from Firebase
+        response = requests.get(f"{firebase.base_url}/users.json")
+        if not response.ok:
+            print(f"Failed to fetch users: {response.status_code}")
+            return
+        
+        users = response.json() or {}
+        processed_count = 0
+        
+        for user_key, user_data in users.items():
+            try:
+                # Check if user has Gmail credentials
+                if 'gmail_credentials' in user_data:
+                    print(f"Processing Gmail for user: {user_key}")
+                    
+                    # Get recent emails using existing function
+                    transactions = get_gmail_transactions(user_key)
+                    
+                    if transactions:
+                        processed_count += len(transactions)
+                        print(f"Processed {len(transactions)} transactions for user {user_key}")
+                    
+            except Exception as e:
+                print(f"Error processing user {user_key}: {str(e)}")
+                continue
+        
+        print(f"✅ Gmail check completed. Processed {processed_count} transactions total.")
+        
+    except Exception as e:
+        print(f"Error in check_all_users_gmail: {str(e)}")
 
 # Schedule Gmail checking every 5 minutes
 schedule.every(5).minutes.do(check_all_users_gmail)
@@ -2692,6 +2211,53 @@ def ml_extract_endpoint():
                 'success': False,
                 'message': 'No transaction detected in the provided text',
                 'email_body_length': len(email_body)
+            }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'error_type': type(e).__name__
+        }), 500
+
+@app.route('/ml/classify_email', methods=['POST'])
+def ml_classify_email():
+    """New ML Email Classifier - Classifies entire Gmail email and extracts transaction data"""
+    try:
+        data = request.get_json()
+        if not data or 'email' not in data:
+            return jsonify({'error': 'email object required in JSON payload'}), 400
+        
+        email = data['email']
+        
+        # Process email through new ML classifier
+        result = classify_and_process_email(email)
+        
+        if result:
+            response = {
+                'success': True,
+                'classification': 'transaction',
+                'transaction_data': result,
+                'ml_system': 'email_classifier_v2'
+            }
+        else:
+            # Classify but don't process (non-transaction email)
+            from ml_email_classifier import EmailClassifier
+            classifier = EmailClassifier()
+            email_data = classifier.process_email(email)
+            
+            response = {
+                'success': True,
+                'classification': email_data.get('category', 'other'),
+                'email_metadata': {
+                    'subject': email_data.get('subject'),
+                    'from': email_data.get('from'),
+                    'category': email_data.get('category')
+                },
+                'transaction_data': None,
+                'ml_system': 'email_classifier_v2'
             }
         
         return jsonify(response)

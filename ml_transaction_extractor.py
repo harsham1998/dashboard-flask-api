@@ -122,7 +122,8 @@ class MLTransactionExtractor:
         # Enhanced currency patterns for Indian and international transactions (prioritized)
         currency_patterns = [
             # High priority: Transaction amount patterns (not balance)
-            r'Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+has\s+been\s+(?:debited|credited)',  # HDFC pattern
+            r'Rs\.?(\d{1,4}(?:,\d{3})*(?:\.\d{2})?)\s+has\s+been\s+(?:debited|credited)\s+from\s+account',  # HDFC account pattern
+            r'Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+has\s+been\s+(?:debited|credited)\s+from\s+your\s+HDFC',  # HDFC credit card pattern
             r'credit\s+card\s+no\.\s+XX\d+\s+for\s+INR\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',  # Axis specific pattern
             r'for\s+INR\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+at',  # General Axis pattern
             r'₹(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+Paid\s+Successfully',  # Razorpay pattern
@@ -179,6 +180,7 @@ class MLTransactionExtractor:
             r'payment\s+to\s+([A-Za-z][A-Za-z\s]*?)\s+(?:is|was|has)',  # "payment to Netplay is"
             
             # UPI patterns - specific to extract recipient name
+            r'to\s+VPA\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to VPA shankarjala0205@okhdfcbank JALA SHANKAR on"
             r'to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to paytm.s14s0zk@pty YERGAMONI RAMAKRISHNA on"
             r'Credit Card XX\d+\s+to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # Full pattern with name
             r'to\s+([a-zA-Z0-9._-]+@[a-zA-Z]+)\s+on',  # Fallback: Extract UPI ID if no name
@@ -448,6 +450,7 @@ class MLTransactionExtractor:
     def _extract_from_account(self, doc, text: str) -> Optional[str]:
         """Extract source account information"""
         account_patterns = [
+            r'debited\s+from\s+account\s+\d+.*?(HDFC\s+Bank)',  # "debited from account 7312 ... HDFC Bank"
             r'from\s+your\s+([A-Za-z\s]+Bank\s+[A-Za-z\s]+Card)(?:\s+XX\d+)?',
             r'debited\s+from\s+your\s+([A-Za-z\s]+Bank\s+[A-Za-z\s]+Card)(?:\s+XX\d+)?',
             r'from\s+your\s+([A-Za-z\s]+(?:Bank|Card|Account)[A-Za-z\s]*)',

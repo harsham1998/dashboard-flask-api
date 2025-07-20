@@ -1818,6 +1818,10 @@ def validate_and_refresh_token(user_email, user_data):
             tokens['last_refreshed'] = datetime.now().isoformat()
             
             user_data['gmailTokens'] = tokens
+            # Get user's current tokens from Firebase
+            user_id = find_user_id_by_email(user_email)
+            if not user_id:
+                return jsonify({'error': 'User not found'}), 400
             firebase.update_user_data(user_id, user_data)
             
             print(f"Token refreshed successfully for {user_email}")

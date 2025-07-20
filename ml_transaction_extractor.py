@@ -101,11 +101,15 @@ class MLTransactionExtractor:
         
         transaction_data = {
             'amount': self._extract_amount(doc, email_body),
+            'credit_or_debit': self._extract_credit_or_debit(doc, email_body),
+            'mode': self._extract_mode(doc, email_body),
+            'card_last_four': self._extract_card_details(doc, email_body),
             'merchant': self._extract_merchant(doc, email_body),
             'date': self._extract_date(doc, email_body),
-            'transaction_type': self._extract_transaction_type(doc, email_body),
-            'card_last_four': self._extract_card_details(doc, email_body),
+            'reference_number': self._extract_reference_number(doc, email_body),
             'category': self._extract_category(doc, email_body),
+            'from_account': self._extract_from_account(doc, email_body),
+            'currency': self._extract_currency(doc, email_body),
             'description': self._extract_description(doc, email_body)
         }
         
@@ -113,8 +117,16 @@ class MLTransactionExtractor:
     
     def _extract_amount(self, doc, text: str) -> Optional[float]:
         """Extract transaction amount using NLP and patterns"""
-        # Currency patterns
+        # Enhanced currency patterns for Indian and international transactions
         currency_patterns = [
+            # Indian Rupee patterns
+            r'Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'INR\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'₹\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'(?:debited|credited|charged|paid)\s+.*?Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'Amount.*?Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            
+            # US Dollar patterns
             r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
             r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*(?:USD|dollars?)',
             r'Amount:?\s*\$?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
@@ -148,12 +160,18 @@ class MLTransactionExtractor:
     
     def _extract_merchant(self, doc, text: str) -> Optional[str]:
         """Extract merchant name using NLP"""
-        # Common merchant indicators
+        # Enhanced merchant patterns for Indian transactions
         merchant_patterns = [
-            r'(?:at|from|to)\s+([A-Z][A-Za-z\s&\-\.]{2,30})',
-            r'Merchant:?\s*([A-Za-z][A-Za-z\s&\-\.]{2,30})',
-            r'Store:?\s*([A-Za-z][A-Za-z\s&\-\.]{2,30})',
-            r'Purchase\s+(?:at|from)\s+([A-Za-z][A-Za-z\s&\-\.]{2,30})'
+            # UPI patterns - extract name from Paytm UPI
+            r'paytm\.[a-zA-Z0-9]+@pty\s+([A-Z\s]+)',  # Paytm pattern
+            r'to\s+[a-zA-Z0-9._]+@[a-zA-Z]+\s+([A-Z\s]+)',  # UPI ID + Name
+            r'to\s+([A-Z][A-Z\s]+?)\s+on\s+\d',  # Name before date (non-greedy)
+            
+            # Standard patterns
+            r'(?:at|from|to)\s+([A-Z][A-Za-z\s&\-\.]{2,50})',
+            r'Merchant:?\s*([A-Za-z][A-Za-z\s&\-\.]{2,50})',
+            r'Store:?\s*([A-Za-z][A-Za-z\s&\-\.]{2,50})',
+            r'Purchase\s+(?:at|from)\s+([A-Za-z][A-Za-z\s&\-\.]{2,50})'
         ]
         
         merchants = []
@@ -162,7 +180,16 @@ class MLTransactionExtractor:
         for pattern in merchant_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
-                merchant = match.strip()
+                # Handle both string and tuple matches
+                if isinstance(match, tuple):
+                    merchant = match[-1].strip()  # Take the last group if tuple
+                else:
+                    merchant = match.strip()
+                
+                # Clean up merchant name
+                merchant = re.sub(r'\s+on$', '', merchant)  # Remove trailing "on"
+                merchant = re.sub(r'\s+at$', '', merchant)  # Remove trailing "at"
+                
                 if len(merchant) > 2 and not merchant.lower() in ['the', 'and', 'for', 'with']:
                     merchants.append(merchant)
         
@@ -187,8 +214,10 @@ class MLTransactionExtractor:
     
     def _extract_date(self, doc, text: str) -> Optional[str]:
         """Extract transaction date using NLP"""
-        # Date patterns
+        # Enhanced date patterns including Indian formats
         date_patterns = [
+            r'on\s+(\d{1,2}-\d{1,2}-\d{2})',  # Indian format: 01-07-25
+            r'(\d{1,2}-\d{1,2}-\d{2})',      # Direct format: 01-07-25
             r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
             r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})',
             r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4})',
@@ -210,11 +239,17 @@ class MLTransactionExtractor:
         # Try to parse and normalize dates
         for date_str in dates:
             try:
-                # Try various date formats
-                for fmt in ['%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d', '%Y-%m-%d', '%B %d, %Y', '%b %d, %Y']:
+                # Try various date formats including Indian
+                formats = [
+                    '%d-%m-%y',    # 01-07-25
+                    '%d-%m-%Y',    # 01-07-2025
+                    '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d', '%Y-%m-%d', 
+                    '%B %d, %Y', '%b %d, %Y'
+                ]
+                for fmt in formats:
                     try:
                         parsed_date = datetime.strptime(date_str, fmt)
-                        return parsed_date.strftime('%Y-%m-%d')
+                        return parsed_date.strftime('%d-%m-%y') if fmt == '%d-%m-%y' else parsed_date.strftime('%Y-%m-%d')
                     except ValueError:
                         continue
             except:
@@ -243,7 +278,11 @@ class MLTransactionExtractor:
             r'card\s+ending\s+in\s+(\d{4})',
             r'card\s+\*+(\d{4})',
             r'\*{4,}(\d{4})',
-            r'xxxx\s*(\d{4})'
+            r'xxxx\s*(\d{4})',
+            r'XX(\d{4})',  # Indian bank pattern
+            r'Card\s+XX(\d{4})',
+            r'ending\s+(\d{4})',
+            r'last\s+4\s+digits?\s+(\d{4})'
         ]
         
         for pattern in card_patterns:
@@ -275,21 +314,111 @@ class MLTransactionExtractor:
         return 'other'
     
     def _extract_description(self, doc, text: str) -> str:
-        """Extract or generate transaction description"""
-        # Look for description patterns
+        """Extract main transaction description sentence"""
+        # Look for main transaction sentence patterns
         desc_patterns = [
+            # Indian bank transaction patterns - capture full sentence including reference number
+            r'(Rs\.?\d+\.?\d*\s+has\s+been\s+(?:debited|credited).*?reference\s+number\s+is\s+\d+)',
+            r'(Rs\.?\d+\.?\d*\s+has\s+been\s+(?:debited|credited).*?on\s+\d{2}-\d{2}-\d{2})',
+            r'(UPI transaction.*?reference\s+number\s+is\s+\d+)',
+            r'(Your card.*?(?:charged|debited|credited).*?reference\s+number\s+is\s+\d+)',
+            r'(Transaction.*?(?:successful|completed|processed).*?reference\s+number\s+is\s+\d+)',
+            
+            # Fallback patterns
             r'Description:?\s*([^\n\r]+)',
-            r'Reference:?\s*([^\n\r]+)',
             r'Details:?\s*([^\n\r]+)'
         ]
         
         for pattern in desc_patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                desc = match.group(1).strip()
+                # Clean up the description
+                desc = re.sub(r'Dear Customer,?\s*', '', desc)
+                desc = re.sub(r'\s+', ' ', desc)  # Normalize whitespace
+                if len(desc) > 20:  # Ensure it's substantial
+                    return desc
+        
+        # Generate description from key transaction details if no pattern matches
+        amount = re.search(r'Rs\.?(\d+\.?\d*)', text)
+        if amount:
+            return f"Transaction of Rs.{amount.group(1)} processed"
+        
+        return "Transaction processed"
+    
+    def _extract_credit_or_debit(self, doc, text: str) -> str:
+        """Extract whether transaction is credit or debit"""
+        text_lower = text.lower()
+        if 'debited' in text_lower or 'debit' in text_lower:
+            return 'debit'
+        elif 'credited' in text_lower or 'credit' in text_lower:
+            return 'credit'
+        return 'debit'  # Default for most transactions
+    
+    def _extract_mode(self, doc, text: str) -> str:
+        """Extract transaction mode (UPI/Card/Bank)"""
+        text_lower = text.lower()
+        if 'upi' in text_lower:
+            return 'upi'
+        elif 'card' in text_lower:
+            return 'card'
+        elif 'neft' in text_lower or 'imps' in text_lower or 'rtgs' in text_lower:
+            return 'bank'
+        elif 'paytm' in text_lower or 'phonepe' in text_lower or 'googlepay' in text_lower:
+            return 'upi'
+        return 'card'  # Default
+    
+    def _extract_reference_number(self, doc, text: str) -> Optional[str]:
+        """Extract transaction reference number"""
+        ref_patterns = [
+            r'UPI\s+transaction\s+reference\s+number\s+is\s+([A-Za-z0-9]{6,})',
+            r'reference\s+number\s+is\s+([A-Za-z0-9]{6,})',
+            r'transaction\s+reference\s+number\s+is\s+([A-Za-z0-9]{6,})',
+            r'reference\s+number:\s*([A-Za-z0-9]{6,})',
+            r'ref\s*no\s*:\s*([A-Za-z0-9]{6,})',
+            r'transaction\s+id:\s*([A-Za-z0-9]{6,})',
+            r'txn\s+id:\s*([A-Za-z0-9]{6,})',
+            r'UPI.*?(\d{12})',  # 12-digit UPI reference
+            r'reference.*?(\d{10,})'  # General numeric reference
+        ]
+        
+        for pattern in ref_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                return match.group(1).strip()
+                return match.group(1)
+        return None
+    
+    def _extract_from_account(self, doc, text: str) -> Optional[str]:
+        """Extract source account information"""
+        account_patterns = [
+            r'from\s+your\s+([A-Za-z\s]+Bank\s+[A-Za-z\s]+Card)(?:\s+XX\d+)?',
+            r'debited\s+from\s+your\s+([A-Za-z\s]+Bank\s+[A-Za-z\s]+Card)(?:\s+XX\d+)?',
+            r'from\s+your\s+([A-Za-z\s]+(?:Bank|Card|Account)[A-Za-z\s]*)',
+            r'your\s+([A-Za-z]+\s+Bank\s+[A-Za-z\s]*\s+Card)',
+            r'([A-Za-z]+\s+Bank\s+[A-Za-z\s]*\s+Credit\s+Card)'
+        ]
         
-        # Generate description from extracted data
-        return "Transaction processed"
+        for pattern in account_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                account = match.group(1).strip()
+                # Clean up account name
+                account = re.sub(r'\s+XX\d*$', '', account)  # Remove XX and digits at end
+                return account
+        return None
+    
+    def _extract_currency(self, doc, text: str) -> str:
+        """Extract currency from transaction"""
+        text_lower = text.lower()
+        if 'rs.' in text_lower or '₹' in text or 'inr' in text_lower:
+            return 'INR'
+        elif '$' in text or 'usd' in text_lower:
+            return 'USD'
+        elif '€' in text or 'eur' in text_lower:
+            return 'EUR'
+        elif '£' in text or 'gbp' in text_lower:
+            return 'GBP'
+        return 'INR'  # Default for Indian transactions
     
     def encrypt_transaction(self, transaction_data: Dict) -> str:
         """Encrypt transaction data for storage"""

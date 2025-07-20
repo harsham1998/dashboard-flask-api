@@ -9,7 +9,7 @@ import base64
 from email.utils import parsedate_to_datetime
 from firebase_service import FirebaseService
 from text_processor import TextProcessor
-from ml_email_classifier import classify_and_process_email, batch_process_emails
+from ml_email_classifier import classify_and_process_email, batch_process_emails, EmailClassifier
 from ml_integration import ml_parse_transaction_email
 import threading
 import schedule
@@ -1683,15 +1683,21 @@ def get_gmail_emails_with_details(gmail_tokens, user_email, minutes=5):
         
         print(f"ML processing complete: {len(transactions)} transactions found")
         
-        # Prepare email summaries for response
+        # Prepare email summaries for response with cleaned bodies
         processed_emails = []
+        classifier = EmailClassifier()
+        
         for email in full_emails:
             headers = email.get('payload', {}).get('headers', [])
+            
+            # Get cleaned email body using the same process as ML classification
+            cleaned_body = classifier.decode_email_body(email.get('payload', {}))
+            
             email_summary = {
                 'id': email.get('id'),
                 'subject': next((h['value'] for h in headers if h['name'] == 'Subject'), ''),
                 'from': next((h['value'] for h in headers if h['name'] == 'From'), ''),
-                'snippet': email.get('snippet', ''),
+                'body': cleaned_body,  # Return cleaned body instead of snippet
                 'has_transaction': any(t['transaction_identifier_id'] == email.get('id') for t in transactions)
             }
             processed_emails.append(email_summary)

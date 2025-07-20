@@ -103,34 +103,70 @@ class EmailClassifier:
         return self._clean_email_body(body)
     
     def _html_to_text(self, html_content: str) -> str:
-        """Convert HTML to plain text"""
-        # Remove HTML tags
-        text = re.sub(r'<[^>]+>', ' ', html_content)
+        """Convert HTML to plain text while preserving transaction content structure"""
+        if not html_content:
+            return ""
+        
+        # Replace common HTML elements with appropriate spacing/formatting
+        text = html_content
+        
+        # Convert line breaks to newlines before removing tags
+        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r'</?p[^>]*>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r'</?div[^>]*>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r'</?tr[^>]*>', '\n', text, flags=re.IGNORECASE)
+        
+        # Add spacing for table cells and list items to preserve structure
+        text = re.sub(r'</?td[^>]*>', ' | ', text, flags=re.IGNORECASE)
+        text = re.sub(r'</?th[^>]*>', ' | ', text, flags=re.IGNORECASE)
+        text = re.sub(r'</?li[^>]*>', '\n• ', text, flags=re.IGNORECASE)
+        
+        # Remove remaining HTML tags
+        text = re.sub(r'<[^>]+>', ' ', text)
         
         # Decode HTML entities
         text = html.unescape(text)
         
-        # Clean up whitespace
-        text = re.sub(r'\s+', ' ', text)
+        # Clean up whitespace while preserving structure
+        text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces to single
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Multiple newlines to double
+        text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)  # Trim line edges
         
         return text.strip()
     
     def _clean_email_body(self, body: str) -> str:
-        """Clean and normalize email body"""
-        # Remove email headers and footers
-        body = re.sub(r'----+.*?From:.*?----+', '', body, flags=re.DOTALL)
-        body = re.sub(r'Get Outlook for.*$', '', body, flags=re.DOTALL)
-        body = re.sub(r'Copyright.*?All rights reserved.*$', '', body, flags=re.DOTALL)
-        body = re.sub(r'This email is confidential.*$', '', body, flags=re.DOTALL)
+        """Clean email body while preserving maximum transaction details"""
+        if not body:
+            return ""
         
-        # Remove excessive whitespace
-        body = re.sub(r'\n\s*\n', '\n', body)
-        body = re.sub(r'\s+', ' ', body)
+        # Only remove clearly non-transaction content at the end of emails
+        # Be very conservative - only remove obvious footers that don't contain transaction data
         
-        # Remove email signatures and disclaimers
-        body = re.sub(r'Terms & Conditions apply.*$', '', body, flags=re.DOTALL)
-        body = re.sub(r'Please do not share.*$', '', body, flags=re.DOTALL)
-        body = re.sub(r'CAUTION:.*?content is safe\.', '', body, flags=re.DOTALL)
+        # Remove email chain headers (forwarded/replied emails)
+        body = re.sub(r'----+\s*Original Message\s*----+.*$', '', body, flags=re.DOTALL)
+        body = re.sub(r'----+\s*From:.*?----+', '', body, flags=re.DOTALL)
+        
+        # Remove only very specific non-transaction footers
+        body = re.sub(r'Get Outlook for iOS.*$', '', body, flags=re.DOTALL)
+        body = re.sub(r'Get Outlook for Android.*$', '', body, flags=re.DOTALL)
+        body = re.sub(r'Sent from my iPhone.*$', '', body, flags=re.DOTALL)
+        body = re.sub(r'Sent from my Samsung.*$', '', body, flags=re.DOTALL)
+        
+        # Remove excessive whitespace but preserve structure
+        body = re.sub(r'\n\s*\n\s*\n+', '\n\n', body)  # Multiple blank lines to double
+        body = re.sub(r'[ \t]+', ' ', body)  # Multiple spaces/tabs to single space
+        body = re.sub(r'^\s+|\s+$', '', body, flags=re.MULTILINE)  # Trim line edges
+        
+        # IMPORTANT: Preserve ALL content that might contain transaction details
+        # Do NOT remove:
+        # - Terms & Conditions (might contain transaction info)
+        # - Disclaimers (might contain balance/limit info) 
+        # - Security notices (might contain transaction details)
+        # - Any text with amounts, dates, or reference numbers
+        
+        # Only remove very obvious spam/marketing at the very end
+        body = re.sub(r'\n\s*This is an automated message.*?do not reply.*$', '', body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r'\n\s*Unsubscribe\s*\|.*$', '', body, flags=re.DOTALL | re.IGNORECASE)
         
         return body.strip()
     

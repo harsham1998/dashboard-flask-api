@@ -1947,6 +1947,12 @@ def check_gmail_now():
                 'gmail_source': txn.get('gmail_source'),
                 'dashboard_user_email': txn.get('dashboard_user_email'),
                 'description': txn.get('description'),
+                'from_account': txn.get('from_account'),
+                'to_account': txn.get('to_account'),
+                'account_number': txn.get('account_number'),
+                'credit_or_debit': txn.get('credit_or_debit'),
+                'mode': txn.get('mode'),
+                'category': txn.get('category'),
                 # Add any other required fields, remove unwanted ones
             }
             transactions_cleaned.append(cleaned_txn)

@@ -103,72 +103,127 @@ class EmailClassifier:
         return self._clean_email_body(body)
     
     def _html_to_text(self, html_content: str) -> str:
-        """Convert HTML to plain text while preserving transaction content structure"""
+        """Convert HTML to clean plain text, removing all CSS/JS/formatting"""
         if not html_content:
             return ""
         
-        # Replace common HTML elements with appropriate spacing/formatting
         text = html_content
         
-        # Convert line breaks to newlines before removing tags
+        # Remove CSS style blocks and JavaScript
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'@media[^{]*\{[^{}]*\{[^}]*\}[^}]*\}', '', text, flags=re.DOTALL)
+        text = re.sub(r'@font-face[^{]*\{[^}]*\}', '', text, flags=re.DOTALL)
+        
+        # Remove CSS rules and properties scattered in text
+        text = re.sub(r'[a-zA-Z-]+\s*:\s*[^;{}]+;', '', text)
+        text = re.sub(r'\{[^}]*\}', '', text)
+        text = re.sub(r'-->[^{]*\{', '', text)  # Remove --> and CSS start
+        text = re.sub(r'\.[a-zA-Z-]+\s*\{', '', text)  # Remove .class {
+        text = re.sub(r'\.[a-zA-Z-]+\s*$', '', text, flags=re.MULTILINE)  # Remove standalone .class
+        
+        # Remove tracking pixels and hidden elements
+        text = re.sub(r'%[a-zA-Z0-9_]+%', '', text)
+        text = re.sub(r'͏+', '', text)  # Remove invisible characters
+        text = re.sub(r'­+', '', text)  # Remove soft hyphens
+        
+        # Convert semantic HTML to readable text
         text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
         text = re.sub(r'</?p[^>]*>', '\n', text, flags=re.IGNORECASE)
         text = re.sub(r'</?div[^>]*>', '\n', text, flags=re.IGNORECASE)
         text = re.sub(r'</?tr[^>]*>', '\n', text, flags=re.IGNORECASE)
-        
-        # Add spacing for table cells and list items to preserve structure
-        text = re.sub(r'</?td[^>]*>', ' | ', text, flags=re.IGNORECASE)
-        text = re.sub(r'</?th[^>]*>', ' | ', text, flags=re.IGNORECASE)
         text = re.sub(r'</?li[^>]*>', '\n• ', text, flags=re.IGNORECASE)
+        text = re.sub(r'</?h[1-6][^>]*>', '\n', text, flags=re.IGNORECASE)
         
-        # Remove remaining HTML tags
-        text = re.sub(r'<[^>]+>', ' ', text)
+        # Add minimal spacing for table structure
+        text = re.sub(r'</?t[hd][^>]*>', ' ', text, flags=re.IGNORECASE)
+        
+        # Remove all remaining HTML tags
+        text = re.sub(r'<[^>]+>', '', text)
         
         # Decode HTML entities
         text = html.unescape(text)
         
-        # Clean up whitespace while preserving structure
-        text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces to single
+        # Clean up URLs and tracking links
+        text = re.sub(r'https?://[^\s]+', '[LINK]', text)
+        
+        # Aggressive whitespace cleanup
+        text = re.sub(r'^\s*\|\s*$', '', text, flags=re.MULTILINE)  # Remove empty pipe lines
+        text = re.sub(r'\|\s*\|\s*\|+', '', text)  # Remove multiple pipes
+        text = re.sub(r'-->\s*}[|\s]*', '', text)  # Remove -->} artifacts
+        text = re.sub(r'^\s*}[|\s]*', '', text, flags=re.MULTILINE)  # Remove standalone } with pipes
+        text = re.sub(r'[ \t]{2,}', ' ', text)  # Multiple spaces to single
         text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Multiple newlines to double
         text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)  # Trim line edges
         
-        return text.strip()
+        # Remove lines that are mostly CSS artifacts or empty
+        lines = text.split('\n')
+        clean_lines = []
+        for line in lines:
+            line = line.strip()
+            # Skip lines that are CSS artifacts, just punctuation, or very short
+            if (len(line) > 3 and 
+                not re.match(r'^[|\s\-=]+$', line) and  # Skip lines with just formatting chars
+                not re.match(r'^[.,:;!\?}]+$', line) and  # Skip lines with just punctuation/braces
+                not re.search(r'^\w+\s*:\s*\w+', line) and  # Skip CSS-like properties
+                not re.match(r'^-->\.[a-zA-Z-]+', line) and  # Skip -->className
+                not re.match(r'^\.[a-zA-Z-]+$', line) and  # Skip standalone .className
+                not re.match(r'^}[|\s]*$', line) and  # Skip closing braces with pipes
+                ('[LINK]' not in line or any(word in line.lower() for word in ['transaction', 'payment', 'amount', 'rs', 'upi', 'bank', 'card', 'credit', 'debit']))):
+                clean_lines.append(line)
+        
+        return '\n'.join(clean_lines).strip()
     
     def _clean_email_body(self, body: str) -> str:
         """Clean email body while preserving maximum transaction details"""
         if not body:
             return ""
         
-        # Only remove clearly non-transaction content at the end of emails
-        # Be very conservative - only remove obvious footers that don't contain transaction data
-        
         # Remove email chain headers (forwarded/replied emails)
         body = re.sub(r'----+\s*Original Message\s*----+.*$', '', body, flags=re.DOTALL)
         body = re.sub(r'----+\s*From:.*?----+', '', body, flags=re.DOTALL)
         
-        # Remove only very specific non-transaction footers
-        body = re.sub(r'Get Outlook for iOS.*$', '', body, flags=re.DOTALL)
-        body = re.sub(r'Get Outlook for Android.*$', '', body, flags=re.DOTALL)
-        body = re.sub(r'Sent from my iPhone.*$', '', body, flags=re.DOTALL)
-        body = re.sub(r'Sent from my Samsung.*$', '', body, flags=re.DOTALL)
+        # Remove CSS/JS artifacts that might have escaped HTML cleaning
+        body = re.sub(r'@media[^{]*\{.*?\}', '', body, flags=re.DOTALL)
+        body = re.sub(r'@font-face[^{]*\{.*?\}', '', body, flags=re.DOTALL)
+        body = re.sub(r'[a-zA-Z-]+\s*:\s*[^;{}]+;', '', body)
         
-        # Remove excessive whitespace but preserve structure
+        # Remove tracking/marketing artifacts
+        body = re.sub(r'%[a-zA-Z0-9_]+%', '', body)
+        body = re.sub(r'͏+', '', body)  # Invisible characters
+        body = re.sub(r'­+', '', body)  # Soft hyphens
+        
+        # Remove obvious non-transaction footers
+        body = re.sub(r'Get Outlook for (iOS|Android).*$', '', body, flags=re.DOTALL)
+        body = re.sub(r'Sent from my (iPhone|Samsung|Android).*$', '', body, flags=re.DOTALL)
+        body = re.sub(r'This is an automated message.*?do not reply.*$', '', body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r'Unsubscribe\s*\|.*$', '', body, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Clean up pipe artifacts and excessive formatting
+        body = re.sub(r'^\s*\|\s*$', '', body, flags=re.MULTILINE)  # Remove empty pipe lines
+        body = re.sub(r'\|\s*\|\s*\|+', '', body)  # Remove multiple consecutive pipes
+        body = re.sub(r'\|\s*$', '', body, flags=re.MULTILINE)  # Remove trailing pipes
+        body = re.sub(r'^\s*\|\s*', '', body, flags=re.MULTILINE)  # Remove leading pipes
+        
+        # Clean up excessive whitespace
+        body = re.sub(r'[ \t]{2,}', ' ', body)  # Multiple spaces/tabs to single
         body = re.sub(r'\n\s*\n\s*\n+', '\n\n', body)  # Multiple blank lines to double
-        body = re.sub(r'[ \t]+', ' ', body)  # Multiple spaces/tabs to single space
         body = re.sub(r'^\s+|\s+$', '', body, flags=re.MULTILINE)  # Trim line edges
         
-        # IMPORTANT: Preserve ALL content that might contain transaction details
-        # Do NOT remove:
-        # - Terms & Conditions (might contain transaction info)
-        # - Disclaimers (might contain balance/limit info) 
-        # - Security notices (might contain transaction details)
-        # - Any text with amounts, dates, or reference numbers
+        # Remove lines that are just formatting artifacts
+        lines = body.split('\n')
+        clean_lines = []
+        for line in lines:
+            line = line.strip()
+            # Keep lines with meaningful content
+            if (len(line) > 2 and 
+                not re.match(r'^[|\s\-=_~©]+$', line) and  # Skip lines with just formatting chars
+                not re.match(r'^[.,:;!\?]+$', line) and  # Skip lines with just punctuation
+                not re.match(r'^\|\s*For more details.*\|\s*©.*$', line) and  # Skip footer lines
+                line != ''):
+                clean_lines.append(line)
         
-        # Only remove very obvious spam/marketing at the very end
-        body = re.sub(r'\n\s*This is an automated message.*?do not reply.*$', '', body, flags=re.DOTALL | re.IGNORECASE)
-        body = re.sub(r'\n\s*Unsubscribe\s*\|.*$', '', body, flags=re.DOTALL | re.IGNORECASE)
-        
-        return body.strip()
+        return '\n'.join(clean_lines).strip()
     
     def classify_email(self, subject: str, sender: str, body: str) -> str:
         """Classify email as transaction, order, statement, or other"""
@@ -307,6 +362,7 @@ class EmailProcessor:
             "date": transaction_details.get('date'),
             "description": transaction_details.get('description'),
             "from_account": transaction_details.get('from_account'),
+            "to_account": transaction_details.get('to_account'),
             "merchant": transaction_details.get('merchant'),
             "mode": transaction_details.get('mode'),
             "reference_number": transaction_details.get('reference_number'),

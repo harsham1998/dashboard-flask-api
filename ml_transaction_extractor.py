@@ -110,6 +110,7 @@ class MLTransactionExtractor:
             'reference_number': self._extract_reference_number(doc, email_body),
             'category': self._extract_category(doc, email_body),
             'from_account': self._extract_from_account(doc, email_body),
+            'to_account': self._extract_to_account(doc, email_body),
             'currency': self._extract_currency(doc, email_body),
             'description': self._extract_description(doc, email_body),
             'available_balance': self._extract_available_balance(doc, email_body)
@@ -122,6 +123,7 @@ class MLTransactionExtractor:
         # Enhanced currency patterns for Indian and international transactions (prioritized)
         currency_patterns = [
             # High priority: Transaction amount patterns (not balance)
+            r'Rs\.\s*(\d{1,4}(?:,\d{3})*(?:\.\d{2})?)\s+is\s+successfully\s+(?:debited|credited)',  # HDFC clean format
             r'Rs\.?(\d{1,4}(?:,\d{3})*(?:\.\d{2})?)\s+has\s+been\s+(?:debited|credited)\s+from\s+account',  # HDFC account pattern
             r'Rs\.?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+has\s+been\s+(?:debited|credited)\s+from\s+your\s+HDFC',  # HDFC credit card pattern
             r'credit\s+card\s+no\.\s+XX\d+\s+for\s+INR\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',  # Axis specific pattern
@@ -180,6 +182,7 @@ class MLTransactionExtractor:
             r'payment\s+to\s+([A-Za-z][A-Za-z\s]*?)\s+(?:is|was|has)',  # "payment to Netplay is"
             
             # UPI patterns - specific to extract recipient name
+            r'by\s+VPA\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "by VPA 8639485842@ybl M NEERAJ on"
             r'to\s+VPA\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to VPA shankarjala0205@okhdfcbank JALA SHANKAR on"
             r'to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # "to paytm.s14s0zk@pty YERGAMONI RAMAKRISHNA on"
             r'Credit Card XX\d+\s+to\s+[a-zA-Z0-9._-]+@[a-zA-Z]+\s+([A-Z][A-Z\s]+)\s+on',  # Full pattern with name
@@ -395,7 +398,7 @@ class MLTransactionExtractor:
             return 'debit'
         
         # Explicit credit keywords
-        elif 'credited' in text_lower or 'received' in text_lower:
+        elif 'credited' in text_lower or 'received' in text_lower or 'deposited' in text_lower:
             return 'credit'
         
         # Credit card usage is always debit (money going out)
@@ -450,6 +453,9 @@ class MLTransactionExtractor:
     def _extract_from_account(self, doc, text: str) -> Optional[str]:
         """Extract source account information"""
         account_patterns = [
+            r'^([A-Z]+\s+BANK)',  # Extract bank names like "HDFC BANK" at start
+            r'([A-Z]+\s+Bank)$',  # Extract bank names like "HDFC Bank" at end  
+            r'credited\s+to\s+your\s+account.*?([A-Z]+\s+[A-Z]+)',  # "credited to your account ... HDFC BANK"
             r'debited\s+from\s+account\s+\d+.*?(HDFC\s+Bank)',  # "debited from account 7312 ... HDFC Bank"
             r'from\s+your\s+([A-Za-z\s]+Bank\s+[A-Za-z\s]+Card)(?:\s+XX\d+)?',
             r'debited\s+from\s+your\s+([A-Za-z\s]+Bank\s+[A-Za-z\s]+Card)(?:\s+XX\d+)?',
@@ -465,6 +471,51 @@ class MLTransactionExtractor:
                 # Clean up account name
                 account = re.sub(r'\s+XX\d*$', '', account)  # Remove XX and digits at end
                 return account
+        return None
+    
+    def _extract_to_account(self, doc, text: str) -> Optional[str]:
+        """Extract destination account information (where money is received)"""
+        to_account_patterns = [
+            # Credit/Deposit patterns
+            r'credited\s+to\s+your\s+account\s+\*\*(\d{4,})',  # "credited to your account **7312"
+            r'credited\s+to\s+account\s+(?:no\.?\s*)?(?:XX)?(\d{4,})',  # "credited to account 7312"
+            r'deposited\s+(?:in|to)\s+account\s+(?:XX)?(\d{4,})',  # "deposited in account 7312"
+            r'received\s+in\s+account\s+(?:XX)?(\d{4,})',  # "received in account 7312"
+            
+            # UPI receiving patterns
+            r'to\s+your\s+account\s+\*\*(\d{4,})',  # "to your account **7312"
+            r'credited\s+to\s+.*?account.*?\*\*(\d{4,})',  # "credited to ... account **7312"
+            
+            # General receiving account patterns
+            r'beneficiary\s+account\s+(?:XX)?(\d{4,})',  # "beneficiary account 7312"
+            r'recipient\s+account\s+(?:XX)?(\d{4,})',  # "recipient account 7312"
+            r'destination\s+account\s+(?:XX)?(\d{4,})',  # "destination account 7312"
+            
+            # Credit card receiving patterns
+            r'credited\s+to\s+your\s+.*?card\s+(?:XX)?(\d{4})',  # "credited to your ... card XX1234"
+            
+            # Account holder patterns (for incoming transfers)
+            r'account\s+holder:?\s*.*?(?:XX)?(\d{4,})',  # "account holder: ... 7312"
+            
+            # Fallback: any account number after credit/receive keywords
+            r'(?:credit|receive|deposit).*?(?:XX)?(\d{4,})',  # General credit pattern
+        ]
+        
+        for pattern in to_account_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                account = match.group(1).strip()
+                # Ensure it's a valid account number (4+ digits)
+                if len(account) >= 4 and account.isdigit():
+                    return account
+        
+        # For credit transactions, try to extract the main account number as destination
+        if 'credit' in text.lower() or 'receive' in text.lower():
+            # Extract any account number mentioned
+            account_match = re.search(r'\*\*(\d{4,})', text)
+            if account_match:
+                return account_match.group(1)
+                
         return None
     
     def _extract_currency(self, doc, text: str) -> str:
@@ -483,6 +534,7 @@ class MLTransactionExtractor:
     def _extract_account_number(self, doc, text: str) -> Optional[str]:
         """Extract account number from transaction"""
         account_patterns = [
+            r'account\s+\*\*(\d{4,})',  # HDFC format: account **7312
             r'account\s+(?:no\.?|number)\s+(?:XX)?(\d{4,})',
             r'a/c\s+(?:XX)?(\d{4,})',
             r'account\s+ending\s+(?:in\s+)?(\d{4})',

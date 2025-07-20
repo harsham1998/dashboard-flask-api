@@ -107,8 +107,11 @@ class EmailClassifier:
         if not html_content:
             return ""
         
-        # Replace common HTML elements with appropriate spacing/formatting
         text = html_content
+        
+        # Remove CSS style blocks and JavaScript
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
         
         # Convert line breaks to newlines before removing tags
         text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
@@ -151,6 +154,19 @@ class EmailClassifier:
         body = re.sub(r'Get Outlook for Android.*$', '', body, flags=re.DOTALL)
         body = re.sub(r'Sent from my iPhone.*$', '', body, flags=re.DOTALL)
         body = re.sub(r'Sent from my Samsung.*$', '', body, flags=re.DOTALL)
+        
+        # Remove CSS artifacts that may have escaped HTML cleaning
+        body = re.sub(r'@media[^{]*\{[^{}]*\{[^}]*\}[^}]*\}', '', body, flags=re.DOTALL)
+        body = re.sub(r'[a-zA-Z-]+\s*:\s*[^;{}]+;', '', body)  # CSS properties
+        body = re.sub(r'\{[^}]*\}', '', body)  # CSS blocks
+        body = re.sub(r'-->\s*', '', body)  # CSS comment endings
+        
+        # Clean up pipe artifacts from table structure
+        body = re.sub(r'\|\s*\|\s*\|+', '', body)  # Remove multiple consecutive pipes
+        body = re.sub(r'\|\s*\|\s*', '', body)  # Remove double pipes
+        body = re.sub(r'\|\s*$', '', body, flags=re.MULTILINE)  # Remove trailing pipes
+        body = re.sub(r'^\s*\|\s*', '', body, flags=re.MULTILINE)  # Remove leading pipes
+        body = re.sub(r'\s*\|\s*\n', '\n', body)  # Remove pipes before newlines
         
         # Remove excessive whitespace but preserve structure
         body = re.sub(r'\n\s*\n\s*\n+', '\n\n', body)  # Multiple blank lines to double

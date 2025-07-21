@@ -81,7 +81,7 @@ class FirebaseService:
             data['tasks'][date].append(task_copy)
             
             # Save user-specific data
-            response = requests.put(f"{self.base_url}/users/{user_id}.json", json=data)
+            response = requests.put(f"{self.base_url}/{user_id}.json", json=data)
             return response.status_code == 200
             
         except Exception as e:

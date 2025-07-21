@@ -109,13 +109,22 @@ class EmailClassifier:
         
         text = html_content
         
-        # Remove CSS style blocks and JavaScript
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        # Remove CSS style blocks and JavaScript - replace tags with empty string but preserve content
+        text = re.sub(r'<style[^>]*>', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'</style>', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'<script[^>]*>', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'</script>', '', text, flags=re.IGNORECASE)
         
-        # Convert line breaks to newlines before removing tags
+        # Clean href attributes - remove data inside href but keep the tag structure
+        text = re.sub(r'href\s*=\s*["\'][^"\']*["\']', 'href=""', text, flags=re.IGNORECASE)
+        
+        # Clean img tags - remove src and other attributes content
+        text = re.sub(r'<img[^>]*>', '', text, flags=re.IGNORECASE)
+        
+        # Convert line breaks and paragraphs to newlines
         text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'</?p[^>]*>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r'<p[^>]*>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r'</p>', '\n', text, flags=re.IGNORECASE)
         text = re.sub(r'</?div[^>]*>', '\n', text, flags=re.IGNORECASE)
         text = re.sub(r'</?tr[^>]*>', '\n', text, flags=re.IGNORECASE)
         

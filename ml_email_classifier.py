@@ -101,50 +101,49 @@ class EmailClassifier:
             return ""
         
         return self._clean_email_body(body)
-    
-    def _html_to_text(self, html_content: str) -> str:
-        """Convert HTML to plain text while preserving transaction content structure"""
-        if not html_content:
-            return ""
-        
-        text = html_content
-        
-        # Remove CSS style blocks and JavaScript - replace tags with empty string but preserve content
-        text = re.sub(r'<style[^>]*>', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'</style>', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'<script[^>]*>', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'</script>', '', text, flags=re.IGNORECASE)
-        
-        # Clean href attributes - remove data inside href but keep the tag structure
-        text = re.sub(r'href\s*=\s*["\'][^"\']*["\']', 'href=""', text, flags=re.IGNORECASE)
-        
-        # Clean img tags - remove src and other attributes content
-        text = re.sub(r'<img[^>]*>', '', text, flags=re.IGNORECASE)
-        
-        # Convert line breaks and paragraphs to newlines
-        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'<p[^>]*>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'</p>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'</?div[^>]*>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'</?tr[^>]*>', '\n', text, flags=re.IGNORECASE)
-        
-        # Add spacing for table cells and list items to preserve structure
-        text = re.sub(r'</?td[^>]*>', ' | ', text, flags=re.IGNORECASE)
-        text = re.sub(r'</?th[^>]*>', ' | ', text, flags=re.IGNORECASE)
-        text = re.sub(r'</?li[^>]*>', '\n• ', text, flags=re.IGNORECASE)
-        
-        # Remove remaining HTML tags
-        text = re.sub(r'<[^>]+>', ' ', text)
-        
-        # Decode HTML entities
-        text = html.unescape(text)
-        
-        # Clean up whitespace while preserving structure
-        text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces to single
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Multiple newlines to double
-        text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)  # Trim line edges
-        
-        return text.strip()
+
+def clean_transaction_html(self, html_content: str) -> str:
+    """Convert HTML to plain text while preserving transaction content structure"""
+    if not html_content:
+        return ""
+
+    text = html_content
+
+    # 1. Remove <style> and <script> blocks completely
+    text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 2. Strip href URLs but keep tag structure
+    text = re.sub(r'href\s*=\s*["\'][^"\']*["\']', 'href=""', text, flags=re.IGNORECASE)
+
+    # 3. Remove <img> tags entirely
+    text = re.sub(r'<img[^>]*>', '', text, flags=re.IGNORECASE)
+
+    # 4. Convert visual structure tags to newlines
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?p[^>]*>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?div[^>]*>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?tr[^>]*>', '\n', text, flags=re.IGNORECASE)
+
+    # 5. Convert table cells and headers to visual columns
+    text = re.sub(r'</?td[^>]*>', ' | ', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?th[^>]*>', ' | ', text, flags=re.IGNORECASE)
+
+    # 6. Convert <li> to bullet points
+    text = re.sub(r'</?li[^>]*>', '\n• ', text, flags=re.IGNORECASE)
+
+    # 7. Remove all remaining HTML tags
+    text = re.sub(r'<[^>]+>', ' ', text)
+
+    # 8. Decode HTML entities (like &nbsp;, &amp;)
+    text = html.unescape(text)
+
+    # 9. Clean whitespace and redundant newlines
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Limit to double newlines
+    text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)
+
+    return text.strip()
     
     def _clean_email_body(self, body: str) -> str:
         """Clean email body while preserving maximum transaction details"""

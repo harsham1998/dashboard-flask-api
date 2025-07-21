@@ -60,7 +60,7 @@ class FirebaseService:
             user_id = user_email.replace('@', '_').replace('.', '_')
             
             # Get user-specific data
-            response = requests.get(f"{self.base_url}/users/{user_id}.json")
+            response = requests.get(f"{self.base_url}/{user_id}.json")
             if response.status_code == 200:
                 data = response.json()
                 if data is None:

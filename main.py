@@ -20,7 +20,7 @@ def main():
         print("🔥 Firebase: dashboard-app-fcd42-default-rtdb.firebaseio.com")
         print("")
         print("📱 SIRI ENDPOINTS:")
-        print("   Tasks: /siri/add-task?text=YOUR_TASK")
+        print("   Tasks: /siri/add-task?text=YOUR_TASK&email=USER_EMAIL")
         print("   Transactions: /siri/addTransaction?message=YOUR_SMS")
         print("")
         print("🔧 API ENDPOINTS:")

@@ -53,6 +53,56 @@ class FirebaseService:
             print(f"Firebase add_task error: {e}")
             return False
     
+    def add_task_for_user(self, user_email: str, task_data: Dict) -> bool:
+        """Add a task to Firebase for a specific user"""
+        try:
+            # Convert email to user ID (replace @ and . with _)
+            user_id = user_email.replace('@', '_').replace('.', '_')
+            
+            # Get user-specific data
+            response = requests.get(f"{self.base_url}/users/{user_id}.json")
+            if response.status_code == 200:
+                data = response.json()
+                if data is None:
+                    data = self._get_default_user_data()
+            else:
+                data = self._get_default_user_data()
+            
+            date = task_data.get('date', datetime.now().strftime('%Y-%m-%d'))
+            
+            # Initialize structure if needed
+            if 'tasks' not in data:
+                data['tasks'] = {}
+            if date not in data['tasks']:
+                data['tasks'][date] = []
+            
+            # Remove date from task_data before adding
+            task_copy = {k: v for k, v in task_data.items() if k != 'date'}
+            data['tasks'][date].append(task_copy)
+            
+            # Save user-specific data
+            response = requests.put(f"{self.base_url}/users/{user_id}.json", json=data)
+            return response.status_code == 200
+            
+        except Exception as e:
+            print(f"Firebase add_task_for_user error: {e}")
+            return False
+    
+    def _get_default_user_data(self) -> Dict:
+        """Get default user data structure"""
+        return {
+            'tasks': {},
+            'quickNotes': '',
+            'importantFeed': [],
+            'quickLinks': [],
+            'teamMembers': [],
+            'taskStatuses': ['pending', 'programming', 'discussion', 'pretest', 'test', 'live'],
+            'transactions': [],
+            'creditCards': [],
+            'currentDate': datetime.now().strftime('%Y-%m-%d'),
+            'lastUpdated': datetime.now().isoformat()
+        }
+    
     def add_transaction(self, transaction_data: Dict) -> bool:
         """Add a transaction to Firebase"""
         try:

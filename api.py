@@ -1057,15 +1057,24 @@ def add_task():
 # Siri endpoints
 @app.route('/siri/add-task')
 def siri_add_task():
-    """Add task via Siri (supports GET with query param)"""
+    """Add task via Siri (supports GET with query param and user email routing)"""
     try:
         task_text = request.args.get('text') or request.args.get('task')
+        user_email = request.args.get('email') or request.args.get('user_email')
         
         if not task_text:
             return jsonify({
                 'success': False,
-                'error': 'Task text is required. Use ?text=your_task'
+                'error': 'Task text is required. Use ?text=your_task&email=user@example.com'
             }), 400
+        
+        # Default user information if no email provided
+        if not user_email:
+            user_name = 'Harsha'
+            user_email = 'harsha@default.com'
+        else:
+            # Extract name from email (before @ symbol) and capitalize
+            user_name = user_email.split('@')[0].capitalize()
         
         today = datetime.now().strftime('%Y-%m-%d')
         
@@ -1073,22 +1082,26 @@ def siri_add_task():
             'id': int(time.time() * 1000),
             'text': task_text.strip(),
             'completed': False,
-            'assignee': 'Harsha (Me)',
+            'assignee': f'{user_name}',
             'status': 'pending',
             'note': '',
             'issues': [],
             'appreciation': [],
-            'createdAt': datetime.now().isoformat()
+            'createdAt': datetime.now().isoformat(),
+            'addedVia': 'siri'
         }
         
-        success = firebase.add_task({**new_task, 'date': today})
+        # Use user-specific firebase service or route to user's data
+        success = firebase.add_task_for_user(user_email, {**new_task, 'date': today})
         
         if success:
-            print(f"🎤 Siri task added: \"{task_text}\" for {today}")
+            print(f"🎤 Siri task added: \"{task_text}\" for {user_name} ({user_email}) on {today}")
             return jsonify({
                 'success': True,
-                'message': f'Task added via Siri: \"{task_text}\"',
+                'message': f'Task added via Siri for {user_name}: \"{task_text}\"',
                 'task': new_task,
+                'user': user_name,
+                'user_email': user_email,
                 'date': today
             })
         else:

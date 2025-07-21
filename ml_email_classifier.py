@@ -192,7 +192,21 @@ class EmailClassifier:
         # Only remove very obvious spam/marketing at the very end
         body = re.sub(r'\n\s*This is an automated message.*?do not reply.*$', '', body, flags=re.DOTALL | re.IGNORECASE)
         body = re.sub(r'\n\s*Unsubscribe\s*\|.*$', '', body, flags=re.DOTALL | re.IGNORECASE)
-        
+        # Remove leftover base64-style encoded href/query strings
+        body = re.sub(r'https?://[^\s"]+', '', body)
+
+        # Remove lines with leftover gibberish (base64/encoded links etc.)
+        body = re.sub(r'^.*(ORECIPZD|id=|ext=|fl=).*$', '', body, flags=re.MULTILINE)
+
+        # Remove repeated | | from broken table parsing
+        body = re.sub(r'(\|\s*\|)+', '|', body)
+
+        # Clean up multiple pipes or leading/trailing pipe mess
+        body = re.sub(r'^\s*\|+', '', body, flags=re.MULTILINE)
+        body = re.sub(r'\|+\s*$', '', body, flags=re.MULTILINE)
+
+        # Final extra cleanup for leftover gaps or artifacts
+        body = re.sub(r'\n\s*\n+', '\n\n', body)
         return body.strip()
     
     def classify_email(self, subject: str, sender: str, body: str) -> str:

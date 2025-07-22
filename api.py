@@ -6,11 +6,13 @@ import pytz
 import time
 import requests
 import base64
+import json
 from email.utils import parsedate_to_datetime
 from firebase_service import FirebaseService
 from text_processor import TextProcessor
 from ml_email_classifier import classify_and_process_email, batch_process_emails, EmailClassifier
 from ml_integration import ml_parse_transaction_email
+from ml_task_extractor import extract_tasks_from_input, task_extractor
 import threading
 import schedule
 
@@ -663,6 +665,41 @@ def test_api_html():
                     </div>
                 </div>
 
+                <!-- ML Task Extraction -->
+                <div class="api-section">
+                    <div class="api-header" onclick="toggleSection('task-extract')">
+                        <div class="api-title">ML Task Extraction</div>
+                        <span class="api-method method-post">POST</span>
+                    </div>
+                    <div class="api-body" id="task-extract">
+                        <p><strong>Endpoint:</strong> /ml/extract-tasks</p>
+                        <p><strong>Description:</strong> Extract task details from text or JSON using ML</p>
+                        
+                        <div class="form-group">
+                            <label>Input Text/JSON:</label>
+                            <textarea id="task-input-text" placeholder="Enter task description, JSON, or multiple tasks separated by ---"></textarea>
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <button class="btn" onclick="testTaskExtraction()">Extract Tasks</button>
+                            <button class="btn" onclick="loadSampleTaskText()" style="background: #6c757d; margin-left: 5px;">Text Sample</button>
+                            <button class="btn" onclick="loadSampleTaskJSON()" style="background: #6c757d; margin-left: 5px;">JSON Sample</button>
+                        </div>
+                        
+                        <div class="response-section" id="task-extract-response" style="display:none;">
+                            <div class="response-header">
+                                <h4>Extracted Tasks:</h4>
+                                <span class="status-badge" id="task-extract-status"></span>
+                            </div>
+                            <div class="response-body" id="task-extract-body"></div>
+                            <div id="task-count-display" style="margin-top: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 14px;">
+                                Tasks Found: Will show after extraction
+                            </div>
+                        </div>
+                        <div class="loading" id="task-extract-loading">Processing with ML...</div>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -848,6 +885,98 @@ def test_api_html():
             function loadSampleGas() {
                 document.getElementById('ml-email-body').value = 
                     "Transaction alert: $67.89 charged at Shell Gas Station #1234 on 03/20/2024 at 2:30 PM. Card ending in 5678. Available balance: $1,234.56.";
+            }
+
+            // Task Extraction Functions
+            async function testTaskExtraction() {
+                const taskInput = document.getElementById('task-input-text').value.trim();
+                const loadingEl = document.getElementById('task-extract-loading');
+                const responseEl = document.getElementById('task-extract-response');
+                const statusEl = document.getElementById('task-extract-status');
+                const bodyEl = document.getElementById('task-extract-body');
+                const countEl = document.getElementById('task-count-display');
+
+                if (!taskInput) {
+                    alert('Please enter some task text or JSON to extract');
+                    return;
+                }
+
+                // Show loading
+                loadingEl.style.display = 'block';
+                responseEl.style.display = 'none';
+
+                try {
+                    const response = await fetch('/ml/extract-tasks', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            input: taskInput
+                        })
+                    });
+
+                    const data = await response.json();
+                    
+                    loadingEl.style.display = 'none';
+                    responseEl.style.display = 'block';
+                    
+                    statusEl.textContent = response.ok ? 'SUCCESS' : 'ERROR';
+                    statusEl.className = 'status-badge ' + (response.ok ? 'status-200' : 'status-500');
+                    
+                    bodyEl.textContent = JSON.stringify(data, null, 2);
+
+                    // Update task count display
+                    if (data.success && data.tasks_count !== undefined) {
+                        const taskCount = data.tasks_count;
+                        const inputType = data.metadata ? data.metadata.input_type : 'unknown';
+                        countEl.textContent = `Tasks Found: ${taskCount} | Input Type: ${inputType}`;
+                    } else {
+                        countEl.textContent = 'Tasks Found: Error processing input';
+                    }
+
+                } catch (error) {
+                    loadingEl.style.display = 'none';
+                    responseEl.style.display = 'block';
+                    statusEl.textContent = 'ERROR';
+                    statusEl.className = 'status-badge status-500';
+                    bodyEl.textContent = 'Request failed: ' + error.message;
+                    countEl.textContent = 'Tasks Found: Error occurred';
+                }
+            }
+
+            function loadSampleTaskText() {
+                document.getElementById('task-input-text').value = 
+                    `Fix the login bug in the authentication module. This task requires 10 hours of work and should be assigned to Harshavardhan Mandali. Due date is 2025-08-15. Sprint: 2370, Competency: 498.
+
+---
+
+Create user dashboard component with data visualization. Estimated 15 hours total. Due: 2025-08-20. Assigned to: John Smith.`;
+            }
+
+            function loadSampleTaskJSON() {
+                document.getElementById('task-input-text').value = JSON.stringify({
+                    "TaskName": "Implement real-time notifications system",
+                    "AssignedTo": "Harshavardhan Mandali",
+                    "TaskDueDate": "2025-08-10 00:00:00",
+                    "SprintID": 2370,
+                    "CompetencyID": 498,
+                    "ExpectedHours": 20,
+                    "TaskBillingStatuses": [
+                        {
+                            "BillingStatusName": "Coding",
+                            "expectedHours": 14
+                        },
+                        {
+                            "BillingStatusName": "Testing",
+                            "expectedHours": 4
+                        },
+                        {
+                            "BillingStatusName": "Review",
+                            "expectedHours": 2
+                        }
+                    ]
+                }, null, 2);
             }
         </script>
     </body>
@@ -2287,6 +2416,126 @@ def ml_classify_email():
             'error': str(e),
             'error_type': type(e).__name__
         }), 500
+
+# Task Extraction ML Endpoint
+@app.route('/ml/extract-tasks', methods=['POST'])
+def extract_tasks_endpoint():
+    """Extract task details from text or JSON input using ML"""
+    try:
+        data = request.get_json()
+        if not data or 'input' not in data:
+            return jsonify({
+                'error': 'Missing input data',
+                'message': 'Please provide input text or JSON in the "input" field'
+            }), 400
+        
+        input_data = data['input']
+        
+        if not input_data or not input_data.strip():
+            return jsonify({
+                'error': 'Empty input',
+                'message': 'Input cannot be empty'
+            }), 400
+        
+        # Process the input using the ML extractor
+        result = extract_tasks_from_input(input_data)
+        
+        return jsonify(result)
+        
+    except json.JSONDecodeError as e:
+        return jsonify({
+            'success': False,
+            'error': 'Invalid JSON format',
+            'message': f'JSON parsing error: {str(e)}'
+        }), 400
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': 'Processing error',
+            'message': f'Error processing input: {str(e)}'
+        }), 500
+
+@app.route('/ml/extract-tasks-simple', methods=['POST'])
+def extract_tasks_simple_endpoint():
+    """Simple endpoint that accepts raw text in request body"""
+    try:
+        # Get raw text from request body
+        input_data = request.get_data(as_text=True)
+        
+        if not input_data or not input_data.strip():
+            return jsonify({
+                'success': False,
+                'error': 'Empty input',
+                'message': 'Please provide input text or JSON'
+            }), 400
+        
+        # Process the input
+        result = extract_tasks_from_input(input_data)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': 'Processing error',
+            'message': str(e)
+        }), 500
+
+@app.route('/ml/test-task-extraction', methods=['GET'])
+def test_task_extraction():
+    """Test endpoint with sample task data"""
+    sample_json = {
+        "TaskName": "Test Task - Fix login bug and implement 2FA",
+        "AssignedTo": "Harshavardhan Mandali",
+        "TaskDueDate": "2025-07-31 00:00:00",
+        "SprintID": 2370,
+        "CompetencyID": 498,
+        "ExpectedHours": 12,
+        "TaskBillingStatuses": [
+            {
+                "BillingStatusName": "Coding",
+                "expectedHours": 8
+            },
+            {
+                "BillingStatusName": "Testing", 
+                "expectedHours": 3
+            },
+            {
+                "BillingStatusName": "Review",
+                "expectedHours": 1
+            }
+        ]
+    }
+    
+    # Test with JSON input
+    json_result = extract_tasks_from_input(json.dumps(sample_json))
+    
+    # Test with text input
+    sample_text = """
+    Fix login bug and implement 2FA
+    Assigned to: Harshavardhan Mandali
+    Due date: 2025-07-31
+    Sprint: 2370
+    Estimated hours: 12
+    """
+    text_result = extract_tasks_from_input(sample_text)
+    
+    return jsonify({
+        'success': True,
+        'tests': [
+            {
+                'input_type': 'JSON',
+                'sample_input': sample_json,
+                'result': json_result
+            },
+            {
+                'input_type': 'Text',
+                'sample_input': sample_text,
+                'result': text_result
+            }
+        ]
+    })
 
 # Start background scheduler
 def start_background_services():
